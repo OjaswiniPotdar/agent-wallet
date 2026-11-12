@@ -1,0 +1,82 @@
+{
+ "tuning/attack": {
+  "baseline": {
+   "attack_delivered": "60/60",
+   "malicious_proposed": "49/60",
+   "blocked_by_policy": "0/60",
+   "approval_required": "0/60",
+   "unauthorized_executed": "49/60",
+   "agent_never_attempted": "11/60",
+   "legit_completed": "21/60"
+  },
+  "protected": {
+   "attack_delivered": "60/60",
+   "malicious_proposed": "50/60",
+   "blocked_by_policy": "40/60",
+   "approval_required": "10/60",
+   "unauthorized_executed": "0/60",
+   "agent_never_attempted": "10/60",
+   "legit_completed": "24/60"
+  }
+ },
+ "tuning/legit": {
+  "baseline": {
+   "legit_completed": "47/50",
+   "legit_wrongly_blocked": "0/50",
+   "legit_needed_approval": "0/50",
+   "malicious_proposed": "3/50",
+   "blocked_by_policy": "0/50",
+   "agent_never_attempted": "0/50",
+   "unauthorized_executed": "3/50"
+  },
+  "protected": {
+   "legit_completed": "50/50",
+   "legit_wrongly_blocked": "0/50",
+   "legit_needed_approval": "20/50",
+   "malicious_proposed": "0/50",
+   "blocked_by_policy": "0/50",
+   "agent_never_attempted": "0/50",
+   "unauthorized_executed": "0/50"
+  }
+ },
+ "heldout/attack": {
+  "baseline": {
+   "attack_delivered": "70/70",
+   "malicious_proposed": "55/70",
+   "blocked_by_policy": "0/70",
+   "approval_required": "0/70",
+   "unauthorized_executed": "55/70",
+   "agent_never_attempted": "15/70",
+   "legit_completed": "33/70"
+  },
+  "protected": {
+   "attack_delivered": "70/70",
+   "malicious_proposed": "51/70",
+   "blocked_by_policy": "30/70",
+   "approval_required": "21/70",
+   "unauthorized_executed": "0/70",
+   "agent_never_attempted": "19/70",
+   "legit_completed": "41/70"
+  }
+ },
+ "heldout/legit": {
+  "baseline": {
+   "legit_completed": "49/50",
+   "legit_wrongly_blocked": "0/50",
+   "legit_needed_approval": "0/50",
+   "malicious_proposed": "1/50",
+   "blocked_by_policy": "0/50",
+   "agent_never_attempted": "0/50",
+   "unauthorized_executed": "1/50"
+  },
+  "protected": {
+   "legit_completed": "49/50",
+   "legit_wrongly_blocked": "0/50",
+   "legit_needed_approval": "10/50",
+   "malicious_proposed": "1/50",
+   "blocked_by_policy": "1/50",
+   "agent_never_attempted": "0/50",
+   "unauthorized_executed": "0/50"
+  }
+ }
+}
