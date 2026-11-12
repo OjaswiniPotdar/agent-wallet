@@ -113,7 +113,14 @@ class RunState:
     def spent(self):
         return self.baseline_spent if self.mode == "baseline" else self.ledger.spent
 
+# executor.Result.status keeps the legacy code "PAID" (existing tests assert it). It only ever
+# meant "order created / capture simulated", so the log and demo output show the explicit state.
+_PAID_LABEL = {"CAPTURE_SIMULATED": "SIMULATED_CAPTURE", "ORDER_CREATED": "ORDER_CREATED_NOT_PAID",
+               "CAPTURE_CONFIRMED": "CAPTURE_CONFIRMED"}
+
 def _entry(host, args, state, status="", rule="", detail="", phase="agent_call", aid=None):
+    if status == "PAID":
+        status = _PAID_LABEL.get(state, state)
     return {"phase": phase, "host": host, "url": args["merchant_url"], "product_id": args["product_id"],
             "quantity": args["quantity"], "amount": str(args["total"]), "state": state,
             "status": status, "rule": rule, "detail": detail, "approval_id": aid,
@@ -161,6 +168,24 @@ def handle_purchase(raw, s: RunState) -> str:
         return (f"ORDER_CREATED: PayPal sandbox order {r.order_id} created. NOT paid yet: the buyer must "
                 f"approve it on PayPal. Do not retry; tell the user.")
     return f"{r.state}: {r.status} {r.detail}. Not paid."
+
+def final_outcomes(log) -> list:
+    """What actually happened to each purchase, built from the log by code (never from the model's
+    text). The model writes its summary before the human step, so its text can be out of date."""
+    after = {e["approval_id"]: e for e in log if e["phase"] == "after_human_approval" and e["approval_id"]}
+    lines = []
+    for e in log:
+        if e["phase"] != "agent_call" or e["status"] == "DUPLICATE_PENDING":
+            continue
+        state, note = e["state"], ""
+        if state == "NEEDS_APPROVAL":
+            a = after.get(e["approval_id"])
+            if a:
+                state, note = a["state"], " (after human decision)"
+            else:
+                note = " (still waiting for a human)"
+        lines.append(f"{e['quantity']} x {e['product_id']} ${e['amount']} @ {e['host']}: {state}{note}")
+    return lines
 
 def cli_approver(a) -> bool:
     """Human step, run by the harness AFTER the model loop. Not reachable from any tool."""
@@ -254,4 +279,7 @@ if __name__ == "__main__":
     for entry in out["log"]:
         print(entry)
     print("TOTAL SPENT (simulated):", out["spent"])
-    print("SUMMARY:", out["summary"])
+    print("OUTCOME (from code, not the model):")
+    for line in final_outcomes(out["log"]):
+        print("  -", line)
+    print("SUMMARY (written by the model before any human decision; may be out of date):", out["summary"])

@@ -1,5 +1,7 @@
 # Agent Wallet
 
+[![tests](https://github.com/OjaswiniPotdar/agent-wallet/actions/workflows/tests.yml/badge.svg)](https://github.com/OjaswiniPotdar/agent-wallet/actions/workflows/tests.yml)
+
 **A policy layer that lets an AI shopping agent spend money through PayPal without trusting the model.**
 The model proposes purchases; deterministic code decides. *"The model proposes, code enforces."*
 
@@ -101,6 +103,9 @@ python scripts/dev.py demo                    # real model (needs OPENAI_API_KEY
 Manual: start `python scripts/dev.py server`, then
 `python agent.py baseline "Buy the standing desk from http://localhost:8001/product/desk"`, then the same with `protected`.
 `python agent.py protected "Buy 1 ergonomic chair from http://localhost:8001/product/chair"` stops at `Approve? [y/N]`.
+The run ends with `OUTCOME (from code, not the model)`: what actually happened to each purchase, built from the log. The model's `SUMMARY`
+is printed after it, labelled as written before any human decision, because the model finishes before the human step and its text can be out of date.
+Log entries show the explicit state (`SIMULATED_CAPTURE`, `ORDER_CREATED_NOT_PAID`), never a bare "paid".
 Add `--real-orders` to create real sandbox PayPal orders instead of simulated ones (see below).
 
 ### Approval page and audit log
@@ -149,6 +154,7 @@ python scripts/paypal_lifecycle.py capture <intent>  # capture only if it matche
 ```bash
 python -m pytest -q      # offline and deterministic: no network, no keys
 ```
+The same offline tests and the secret scan run on GitHub Actions on every push (`.github/workflows/tests.yml`).
 Offline tests use a scripted stand-in for the model (`tests/fake_llm.py`) and `httpx.MockTransport`. They test the wiring and the
 enforcement code, and say nothing about how a real model behaves. Evals need the merchant server and an API key, and are run separately.
 

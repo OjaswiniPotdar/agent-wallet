@@ -1,0 +1,23 @@
+# Offline tests on every push and pull request. No API keys, no network calls to OpenAI or PayPal.
+name: tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0            # secret scan also checks git history
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: python -m pip install uv
+      - name: Install dependencies
+        run: uv sync
+      - name: Offline tests
+        run: uv run python -m pytest -q
+      - name: Secret scan
+        run: uv run python scripts/scan_secrets.py --history
