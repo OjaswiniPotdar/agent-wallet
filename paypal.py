@@ -37,7 +37,7 @@ def create_order(amount: str, merchant: str, request_id: str, custom_id=None, cu
     body = {"intent": "CAPTURE", "purchase_units": [unit]}
     if return_url and cancel_url:
         body["payment_source"] = {"paypal": {"experience_context": {
-            "return_url": return_url, "cancel_url": cancel_url, "user_action": "PAY_NOW",
+            "return_url": return_url, "cancel_url": cancel_url, "user_action": "PAY_NOW", "landing_page": "LOGIN",
             "shipping_preference": "NO_SHIPPING", "brand_name": "Agent Wallet demo"}}}
     r = _h(http).post(f"{BASE}/v2/checkout/orders",
         headers={"Authorization": f"Bearer {_token(http)}",

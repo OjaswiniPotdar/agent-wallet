@@ -287,7 +287,8 @@ if __name__ == "__main__":
     print("MODE:", out["mode"])
     for entry in out["log"]:
         print(entry)
-    print("TOTAL SPENT (simulated):", out["spent"])
+    print("BUDGET RESERVED (real sandbox orders; paid only once PayPal confirms a capture):" if real
+          else "TOTAL SPENT (simulated):", out["spent"])
     print("OUTCOME (from code, not the model):")
     for line in final_outcomes(out["log"]):
         print("  -", line)

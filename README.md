@@ -7,7 +7,8 @@ The model proposes purchases; deterministic code decides. *"The model proposes, 
 
 Built for the PayPal AI Hackathon (Devpost). License: MIT.
 
-> **Status: hackathon prototype.** The PayPal capture step is **simulated** (see [Real vs simulated](#real-vs-simulated)).
+> **Status: hackathon prototype.** The evals and the default demo **simulate** the PayPal capture. With `--real-orders`, one real
+> sandbox payment (buyer approval on PayPal, guarded capture, verified webhook) was run end to end (see [Real vs simulated](#real-vs-simulated)).
 > Results come from a small custom test suite and one model. They are evidence, not proof of security.
 
 ## The problem
@@ -186,7 +187,8 @@ python scripts/paypal_lifecycle.py capture <intent>  # same guarded capture from
 - **Webhooks.** `POST /webhooks/paypal` on the approvals server (`:8002`): signature verified by PayPal via
   `/v1/notifications/verify-webhook-signature` (no bypass; missing `PAYPAL_WEBHOOK_ID` -> 503), dedupe by event id (atomic, also under
   parallel redelivery), then `PAYMENT.CAPTURE.COMPLETED / DENIED / PENDING` is reconciled against the intent. Receiving real events
-  needs a public URL (e.g. a tunnel) registered in the sandbox app.
+  needs a public HTTPS URL: e.g. `cloudflared tunnel --url http://localhost:8002`, then in the PayPal sandbox app add a webhook
+  `https://<tunnel>/webhooks/paypal` for the three *Payment capture* events and put its ID in `.env` as `PAYPAL_WEBHOOK_ID`.
 - `python scripts/replay_webhook.py` replays a **SIMULATED** sample event through the same handler with a stub verifier and a throwaway
   database (bad signature, tampered amount, wrong order, unknown intent, valid, duplicate, late event). It is labeled SIMULATED and
   proves only the decision logic.
@@ -247,7 +249,8 @@ malicious purchase proposed, blocked by code, approval required, unauthorized pa
 - **OpenAI `gpt-5-nano`** (chat completions, tool calling) reads pages and decides what to buy. It only **proposes**.
   Code does everything else: price verification, policy decisions, approvals, budget accounting, payment execution, state tracking.
 - **PayPal sandbox REST API** (`paypal.py`): OAuth, Orders v2 create with buyer approval (return/cancel URLs), get, guarded capture,
-  and webhook signature verification, behind `--real-orders`. The evals and the default demo simulate the capture.
+  and webhook signature verification, behind `--real-orders`; one full sandbox payment and its webhook were run end to end.
+  The evals and the default demo simulate the capture.
 - **AG Studio / AG Grid** (hackathon sponsor tool): the security dashboard in `dashboard/`, built from the official
   PayPal x AG Studio boilerplate, with a custom widget, custom theme and Studio's AI assistant (read-only, via a local key-holding proxy).
 - FastAPI (fake merchant, approval page), httpx, pytest, uv. Next.js only to rebuild the dashboard.
@@ -260,8 +263,8 @@ malicious purchase proposed, blocked by code, approval required, unauthorized pa
 | Catalog check, policy, ledger, approvals, idempotency keys, state machine | real code, tested |
 | PayPal OAuth + create order | **real sandbox API call** (`python scripts/paypal_smoke.py`, and `--real-orders`); **not used in the evaluation runs** |
 | PayPal capture in the agent and evals | **simulated** (`CAPTURE_SIMULATED`) |
-| PayPal capture after buyer approval (`--real-orders` -> `/paypal/return`, or `paypal_lifecycle.py capture`) | real sandbox call, implemented and unit-tested against mocked responses; **a successful end-to-end sandbox capture has not been demonstrated yet** (it needs a sandbox buyer to approve the order) |
-| Webhook signature verification, dedupe, reconciliation | implemented and unit-tested with mocked PayPal responses; **no real PayPal event has been received** (needs a public URL). `replay_webhook.py` is SIMULATED |
+| PayPal capture after buyer approval (`--real-orders` -> `/paypal/return`, or `paypal_lifecycle.py capture`) | **real, demonstrated end to end once in the sandbox (2026-11-12)**: the protected agent created order `1AS906923E264163C` (3 x paper, $19.50), a separate sandbox buyer approved it on PayPal, `/paypal/return` reconciled and captured it, PayPal returned capture `46T85467FE4872150` `COMPLETED`. One successful run; declined, pending and refund paths were not exercised live |
+| Webhook signature verification, dedupe, reconciliation | **real, demonstrated once (2026-11-12)**: PayPal's `PAYMENT.CAPTURE.COMPLETED` for the capture above reached `/webhooks/paypal` through a cloudflared tunnel, PayPal verified the signature, and it was reconciled against the intent (`CAPTURE_CONFIRMED`). Needs a public HTTPS URL and `PAYPAL_WEBHOOK_ID`, so it is off in the default local setup. `replay_webhook.py` is SIMULATED. PayPal's webhook *simulator* events cannot be verified and are correctly refused |
 | Merchant shop and its injections | fake, written for this project |
 | Human approver in evals | deterministic oracle; CLI prompt or signed-in local web page in the demo |
 
@@ -274,7 +277,7 @@ Every simulated payment is labeled `CAPTURE_SIMULATED` in logs and output.
 - **Wrong intent under the thresholds.** Nothing compares the purchase to what the user actually asked for. Over-orders below the approval threshold at an allowed merchant execute.
 - **Redirects and checkout destinations.** The allowlist checks the merchant host the agent names. It does not validate where PayPal or a checkout page actually sends the money.
 - **State loss and scale.** By default the ledger and the HMAC approval store are in memory, per run (that is how the evals ran). `LEDGER_DB=<path>` switches the budget to the persistent SQLite ledger, which survives restarts and is atomic across processes; the approval store is still per process, so a restart drops pending approvals (they must be requested again). SQLite is a single-machine store, not a payment-grade database.
-- **Real captures and webhooks, end to end.** The code paths exist and are tested against mocked PayPal responses only. Behavior against live PayPal (and the exact shape of real events) is unverified.
+- **Live PayPal beyond one happy path.** One real sandbox capture and its real webhook succeeded end to end. Declined, pending, expired, refunded and duplicate-delivery cases are tested against mocked PayPal responses only, and nothing has run against live (non-sandbox) PayPal.
 - **Port and scheme.** R1 compares the host only: `http://localhost:9999` passes as `localhost`.
 - **Generalization.** Own-scenario testing, one small model, 10 trials per cell. A different model, new attack styles or a determined adversary may behave differently.
 
