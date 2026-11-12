@@ -135,6 +135,8 @@ ol.tape li { display: grid; grid-template-columns: 46px 64px 1fr; gap: 10px; pad
 
 <section class="task" aria-label="Task">
   <div class="presets" id="presets" role="group" aria-label="Example tasks"></div>
+  <p class="hint" style="margin:0">Shop: <b id="shopurl"></b>, a fake demo store served by this app. It is not a real merchant;
+    the attacks are planted in its pages, and its catalog is the trusted price source.</p>
   <div class="taskrow">
     <label><span class="hint" style="display:block;margin-bottom:4px">What should the shopping agent do?</span>
       <textarea id="task" rows="2"></textarea></label>
@@ -166,7 +168,7 @@ PayPal sandbox order that is paid only after a sandbox buyer approves it on PayP
 <script>
 const CSRF = document.querySelector('meta[name=csrf]').content;
 const ROLE = document.querySelector('meta[name=role]').content;
-const ALLOWED = new Set(['localhost', 'officesupplies.test']);
+const ALLOWED = new Set(['localhost', 'officesupplies.test']);   // + the shop's own host, added in init()
 const RULES = {
   R1_ALLOWLIST: 'merchant is not on the allowlist', R2_AMOUNT: 'invalid amount', R3_CAP: 'over the $150 per-purchase cap',
   R4_BUDGET: 'over the $500 budget', R5_SPLIT: 'looks like a split purchase', R6_APPROVAL: 'over $75, a person must approve',
@@ -204,6 +206,8 @@ function press(groupAttr, value) {
 async function init() {
   const p = await api('/api/console/presets');
   Object.assign(state, { presets: p.presets, modelReady: p.model_ready, paypalReady: p.paypal_ready });
+  $('#shopurl').textContent = p.shop_url;
+  try { ALLOWED.add(new URL(p.shop_url).hostname); } catch (e) { /* keep defaults */ }
   $('#presets').innerHTML = p.presets.map((x) =>
     `<button type="button" class="preset" data-preset="${esc(x.id)}" data-kind="${esc(x.kind)}" aria-pressed="false"><span class="k" aria-hidden="true"></span>${esc(x.label)}</button>`).join('');
   $('#presets').addEventListener('click', (ev) => { const b = ev.target.closest('[data-preset]'); if (b) choose(b.dataset.preset); });

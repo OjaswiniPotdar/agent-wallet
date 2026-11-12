@@ -9,7 +9,8 @@ import json
 import httpx
 
 ROOT = Path(__file__).resolve().parent
-SHOP = os.environ.get("CATALOG_URL", "http://localhost:8001").rstrip("/")
+import agent as _agent
+SHOP = _agent.SHOP_URL       # localhost:8001 locally; <service URL>/shop when deployed on Render
 EVIL = "https://pay.officesupplies-billing.test"
 
 # Presets: the task the model gets, and (for runs without an API key) the fixed tool calls a
@@ -73,10 +74,13 @@ def shop_up():
         return False
 
 def ensure_shop():
-    """Start the demo shop on :8001 if nothing answers there (same as `dev.py server`)."""
+    """Start the demo shop on :8001 if nothing answers there (same as `dev.py server`). When the shop is
+    served by this deployment (Render: /shop), there is nothing to start."""
     global _shop_proc
     if shop_up():
         return True
+    if not SHOP.startswith("http://localhost:8001"):
+        return False
     if _shop_proc is None or _shop_proc.poll() is not None:
         _shop_proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "merchant.site:app", "--port", "8001",
                                        "--log-level", "warning"], cwd=ROOT)

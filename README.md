@@ -93,7 +93,8 @@ If `uv` warns that `VIRTUAL_ENV` does not match, call the venv's Python directly
 | `APPROVAL_SECRET` | approvals | HMAC key; set your own value (default is dev-only) |
 | `PAYPAL_WEBHOOK_ID` | webhook route | ID of the webhook in your PayPal sandbox app; without it the route refuses every event (503) |
 | `PAYPAL_MERCHANT_ID` | optional | if set, orders and webhook events must name this payee |
-| `CATALOG_URL` | optional | default `http://localhost:8001` |
+| `SHOP_URL` | optional | where the agent shops; default `http://localhost:8001`, on Render `<service URL>/shop` |
+| `CATALOG_URL` | optional | trusted price catalog; default = `SHOP_URL` |
 | `LEDGER_DB`, `LEDGER_ACCOUNT` | optional | persistent atomic budget ledger file and budget name (default: in memory per run) |
 | `PAYPAL_RETURN_BASE` | optional | where PayPal sends the buyer back (default `http://localhost:8002`) |
 | `AUTH_SESSION_MINUTES` | optional | sign-in session lifetime (default 30) |
@@ -120,8 +121,11 @@ shop on `:8001` if it is not running. Starting runs and approving need the appro
 
 ### Live on Render
 
-`render.yaml` deploys the approval server, the demo console and the dashboard as one Render web service (the console starts
-the demo shop inside the same service). In Render: **New > Blueprint**, pick this repository, and fill in the secrets it asks for:
+`render.yaml` deploys the approval server, the demo console, the dashboard and the demo shop as one Render web service.
+On Render the shop is served at `https://<your-service>.onrender.com/shop/...` (public, fake, with the planted attacks), and the
+agent's prompt, the catalog price check and the merchant allowlist use that address (`agent.shop_url_from_env`: `SHOP_URL`, else
+`RENDER_EXTERNAL_URL` + `/shop`). Locally nothing changes: the shop stays on `http://localhost:8001`, and the prompt is
+byte-identical to the one the evals ran with (checked against its recorded hash in `tests/test_shop_url.py`). In Render: **New > Blueprint**, pick this repository, and fill in the secrets it asks for:
 `ADMIN_USERNAME` and `ADMIN_PASSWORD` (the first approver, created at startup; password at least 12 characters), `OPENAI_API_KEY`,
 `PAYPAL_CLIENT_ID`, `PAYPAL_SECRET` (sandbox), and optionally `PAYPAL_WEBHOOK_ID`. `APPROVAL_SECRET` is generated. On Render,
 cookies are `Secure` and PayPal sends buyers back to the service's own URL automatically. For webhooks, register

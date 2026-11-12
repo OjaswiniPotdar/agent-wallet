@@ -93,7 +93,7 @@ async def require_login(request: Request, call_next):
         origin = request.headers.get("origin")
         if origin and origin.split("://", 1)[-1] != request.headers.get("host", ""):
             return HTMLResponse("cross-origin request refused", status_code=403)
-    if path in PUBLIC_PATHS:
+    if path in PUBLIC_PATHS or path == "/shop" or path.startswith("/shop/"):
         return await call_next(request)
     sess = auth.session(request.cookies.get(auth.COOKIE))
     if not sess:
@@ -330,7 +330,7 @@ def console_presets():
     return {"presets": [{k: p[k] for k in ("id", "label", "kind", "task", "hint")} for p in console.PRESETS],
             "model_ready": bool(os.environ.get("OPENAI_API_KEY")),
             "paypal_ready": bool(os.environ.get("PAYPAL_CLIENT_ID") and os.environ.get("PAYPAL_SECRET")),
-            "shop_up": console.shop_up()}
+            "shop_up": console.shop_up(), "shop_url": console.SHOP}
 
 @app.post("/api/console/run")
 async def console_run(request: Request):
@@ -356,8 +356,9 @@ async def console_run(request: Request):
         return JSONResponse({"error": "OPENAI_API_KEY is not set: use a scripted run"}, status_code=400)
     if real and not (os.environ.get("PAYPAL_CLIENT_ID") and os.environ.get("PAYPAL_SECRET")):
         return JSONResponse({"error": "PayPal sandbox keys are not set"}, status_code=400)
-    if not console.ensure_shop():
-        return JSONResponse({"error": "the demo shop on :8001 did not start"}, status_code=503)
+    from starlette.concurrency import run_in_threadpool
+    if not await run_in_threadpool(console.ensure_shop):     # may call this same server (/shop)
+        return JSONResponse({"error": f"the demo shop at {console.SHOP} is not answering"}, status_code=503)
     modes = ["baseline", "protected"] if mode == "compare" else [mode]
     ids = [console.start(task, m, scripted=scripted, real_orders=real, user=request.state.user["username"],
                          preset=preset["id"] if preset else None,
@@ -448,6 +449,11 @@ async def ai_responses(request: Request):
     return StreamingResponse(relay(), status_code=upstream.status_code,
                              media_type=upstream.headers.get("content-type", "application/json"),
                              headers={"Cache-Control": "no-store"})
+
+# The demo shop (merchant/site.py), also served here at /shop: public, fake, with planted attacks.
+# On Render the agent shops at <service URL>/shop; locally it still uses the separate :8001 shop.
+from merchant.site import app as _shop_app
+app.mount("/shop", _shop_app)
 
 _DASH = ROOT / "dashboard" / "out"
 if _DASH.is_dir():
