@@ -67,7 +67,8 @@ def make_pay(real_orders: bool, create_order=None, intents=None):
             rid = request_id or str(uuid.uuid4())
             try:
                 iid = (intent or {}).get("intent_id")
-                back = os.environ.get("PAYPAL_RETURN_BASE", "http://localhost:8002").rstrip("/")
+                back = (os.environ.get("PAYPAL_RETURN_BASE") or os.environ.get("RENDER_EXTERNAL_URL")
+                        or "http://localhost:8002").rstrip("/")
                 urls = ({"return_url": f"{back}/paypal/return?intent={iid}",
                          "cancel_url": f"{back}/paypal/cancel?intent={iid}"} if iid else {})
                 order = (create_order or paypal.create_order)(

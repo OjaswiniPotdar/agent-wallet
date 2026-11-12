@@ -118,6 +118,18 @@ order and shows the PayPal buyer link; the card turns to *Paid through PayPal* o
 It uses the real model when `OPENAI_API_KEY` is set; without a key, the examples replay fixed tool calls (not a model) through the same enforcement code, and each run says which it was. The console starts the demo
 shop on `:8001` if it is not running. Starting runs and approving need the approver role and the session's CSRF token.
 
+### Live on Render
+
+`render.yaml` deploys the approval server, the demo console and the dashboard as one Render web service (the console starts
+the demo shop inside the same service). In Render: **New > Blueprint**, pick this repository, and fill in the secrets it asks for:
+`ADMIN_USERNAME` and `ADMIN_PASSWORD` (the first approver, created at startup; password at least 12 characters), `OPENAI_API_KEY`,
+`PAYPAL_CLIENT_ID`, `PAYPAL_SECRET` (sandbox), and optionally `PAYPAL_WEBHOOK_ID`. `APPROVAL_SECRET` is generated. On Render,
+cookies are `Secure` and PayPal sends buyers back to the service's own URL automatically. For webhooks, register
+`https://<your-service>.onrender.com/webhooks/paypal` in the PayPal sandbox app. Limits of the free plan: the service sleeps when
+idle (the first request takes about a minute), and SQLite data (audit log, orders, extra users) resets on every restart or
+deploy; the admin account is recreated from the environment each time. Sign-in protects everything except the health check,
+the PayPal webhook (signature-checked) and the buyer return (guarded capture).
+
 ### Command line
 
 ```bash

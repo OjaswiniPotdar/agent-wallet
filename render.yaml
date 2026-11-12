@@ -1,0 +1,28 @@
+# Render Blueprint: one web service runs the approval server, the demo console, the AG Studio
+# dashboard (prebuilt in dashboard/out) and, started on demand by the console, the demo shop on an
+# internal port. Secrets are entered in the Render dashboard (sync: false), never committed.
+services:
+  - type: web
+    name: agent-wallet
+    runtime: python
+    plan: free
+    buildCommand: pip install uv && uv sync --frozen --no-dev
+    startCommand: uv run --no-dev uvicorn approvals_web:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.12
+      - key: ADMIN_USERNAME          # first approver account, created at startup if missing
+        sync: false
+      - key: ADMIN_PASSWORD          # at least 12 characters
+        sync: false
+      - key: APPROVAL_SECRET         # HMAC key for purchase approvals
+        generateValue: true
+      - key: OPENAI_API_KEY          # real model in the console; leave empty for scripted runs only
+        sync: false
+      - key: PAYPAL_CLIENT_ID        # PayPal SANDBOX app credentials
+        sync: false
+      - key: PAYPAL_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID       # webhook registered to https://<service>.onrender.com/webhooks/paypal
+        sync: false

@@ -14,7 +14,17 @@ load_dotenv()
 import audit, auth
 
 ROOT = Path(__file__).resolve().parent
-app = FastAPI(title="Agent Wallet approvals (local demo)")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def _lifespan(app):
+    try:
+        bootstrap_admin()                          # defined below; runs once at startup
+    except ValueError as ex:                       # e.g. password shorter than 12 characters
+        print(f"[auth] ADMIN_USERNAME/ADMIN_PASSWORD not used: {ex}")
+    yield
+
+app = FastAPI(title="Agent Wallet approvals (local demo)", lifespan=_lifespan)
 e = lambda x: html.escape("" if x is None else str(x))   # all stored values are untrusted -> escape
 ts = lambda t: time.strftime("%H:%M:%S", time.localtime(t)) if t else ""
 
@@ -50,14 +60,31 @@ def _results_html():
     return "".join(out)
 
 # ---- authentication ---------------------------------------------------------------------------
-PUBLIC_PATHS = {"/login", "/webhooks/paypal", "/paypal/return", "/paypal/cancel"}
+PUBLIC_PATHS = {"/login", "/healthz", "/webhooks/paypal", "/paypal/return", "/paypal/cancel"}
 
 def _safe_next(n):
     return n if isinstance(n, str) and n.startswith("/") and not n.startswith("//") and "\\" not in n else "/"
 
 def _cookie_secure():
     import os
-    return os.environ.get("COOKIE_SECURE", "0") == "1"
+    return os.environ.get("COOKIE_SECURE", "1" if os.environ.get("RENDER") == "true" else "0") == "1"
+
+def bootstrap_admin():
+    """Hosted deploys have no terminal for scripts/create_user.py: create the first approver from
+    ADMIN_USERNAME / ADMIN_PASSWORD if that user does not exist yet. Never overwrites a user."""
+    import os
+    name, pw = os.environ.get("ADMIN_USERNAME", "").strip(), os.environ.get("ADMIN_PASSWORD", "")
+    if not (name and pw):
+        return False
+    with auth._db() as c:
+        if c.execute("SELECT 1 FROM users WHERE username=?", (name.lower(),)).fetchone():
+            return False
+    auth.create_user(name, pw, "approver")
+    return True
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
