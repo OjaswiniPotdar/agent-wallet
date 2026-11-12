@@ -25,15 +25,24 @@ def _token(http=None):
     r.raise_for_status()
     return r.json()["access_token"]
 
-def create_order(amount: str, merchant: str, request_id: str, custom_id=None, currency="USD", http=None):
-    """custom_id carries our intent id so a later webhook/GET can be matched to the approved intent."""
+def create_order(amount: str, merchant: str, request_id: str, custom_id=None, currency="USD", http=None,
+                 return_url=None, cancel_url=None):
+    """custom_id carries our intent id so a later webhook/GET can be matched to the approved intent.
+    With return_url/cancel_url, PayPal sends the buyer back after approving or cancelling on PayPal
+    (payment_source.paypal.experience_context); the order starts as PAYER_ACTION_REQUIRED and the
+    buyer link is the 'payer-action' link. Without a return URL PayPal has nowhere to send the buyer."""
     unit = {"description": str(merchant)[:127], "amount": {"currency_code": currency, "value": amount}}
     if custom_id:
         unit["custom_id"] = str(custom_id)[:127]
+    body = {"intent": "CAPTURE", "purchase_units": [unit]}
+    if return_url and cancel_url:
+        body["payment_source"] = {"paypal": {"experience_context": {
+            "return_url": return_url, "cancel_url": cancel_url, "user_action": "PAY_NOW",
+            "shipping_preference": "NO_SHIPPING", "brand_name": "Agent Wallet demo"}}}
     r = _h(http).post(f"{BASE}/v2/checkout/orders",
         headers={"Authorization": f"Bearer {_token(http)}",
                  "PayPal-Request-Id": request_id},
-        json={"intent": "CAPTURE", "purchase_units": [unit]},
+        json=body,
         timeout=15)
     r.raise_for_status()
     return r.json()

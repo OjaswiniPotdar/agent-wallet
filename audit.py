@@ -24,6 +24,8 @@ def _conn(path=None):
     c = sqlite3.connect(path or DB_PATH, timeout=10, isolation_level=None)  # autocommit
     c.row_factory = sqlite3.Row
     c.executescript(SCHEMA)
+    if "decided_by" not in {r[1] for r in c.execute("PRAGMA table_info(decisions)")}:
+        c.execute("ALTER TABLE decisions ADD COLUMN decided_by TEXT")   # databases from before login existed
     return c
 
 def _clip(x, n=200):
@@ -46,11 +48,12 @@ def add_pending(aid, host, item, quantity, amount, currency="USD", run_id=None, 
                   (aid, now, now + ttl, run_id, _clip(host), _clip(item), _clip(quantity),
                    _clip(amount), currency))
 
-def decide(aid, approve: bool, path=None) -> bool:
-    """Atomic: only a still-pending, unexpired request can be decided, and only once."""
+def decide(aid, approve: bool, path=None, by=None) -> bool:
+    """Atomic: only a still-pending, unexpired request can be decided, and only once.
+    `by` is the signed-in approver (approvals_web); recorded with the decision."""
     with _lock, _conn(path) as c:
-        cur = c.execute("UPDATE decisions SET status=?, decided=? WHERE approval_id=? AND status='pending'"
-                        " AND expires > ?", ("approved" if approve else "rejected", time.time(), aid, time.time()))
+        cur = c.execute("UPDATE decisions SET status=?, decided=?, decided_by=? WHERE approval_id=? AND status='pending'"
+                        " AND expires > ?", ("approved" if approve else "rejected", time.time(), _clip(by, 64), aid, time.time()))
         return cur.rowcount == 1
 
 def get_status(aid, path=None):

@@ -3,6 +3,7 @@ import threading, time
 from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
+from web_login import signed_in
 import agent, audit, approvals_web
 from agent import run_agent
 from fake_llm import FakeClient, buy
@@ -45,16 +46,16 @@ def test_audit_log_written_and_has_no_secrets(monkeypatch):
 
 def test_page_lists_pending_and_approve_button_records_decision():
     audit.add_pending("a4", "localhost", "chair", 1, "140.00")
-    c = TestClient(approvals_web.app)
+    c = signed_in(approvals_web.app)
     page = c.get("/").text
-    assert "Waiting for you (1)" in page and "SIMULATED" in page and "No authentication" in page
-    r = c.post("/decide", data={"aid": "a4", "action": "approve"}, follow_redirects=False)
+    assert "Waiting for you (1)" in page and "SIMULATED" in page and "Sign-in required" in page
+    r = c.post("/decide", data={"aid": "a4", "action": "approve", "csrf": c.csrf}, follow_redirects=False)
     assert r.status_code == 303 and audit.get_status("a4") == "approved"
     assert "Waiting for you (0)" in c.get("/").text
 
 def test_page_escapes_untrusted_values():
     audit.add_pending("a5", "<script>x</script>", "<img src=x>", 1, "1.00")
-    page = TestClient(approvals_web.app).get("/").text
+    page = signed_in(approvals_web.app).get("/").text
     assert "<script>x</script>" not in page and "&lt;script&gt;" in page
 
 def _run_with_web_human(decision, steps):
@@ -63,7 +64,7 @@ def _run_with_web_human(decision, steps):
         for _ in range(100):
             p = audit.pending()
             if p:
-                TestClient(approvals_web.app).post("/decide", data={"aid": p[0]["approval_id"], "action": decision})
+                (c := signed_in(approvals_web.app)).post("/decide", data={"aid": p[0]["approval_id"], "action": decision, "csrf": c.csrf})
                 return
             time.sleep(0.05)
     t = threading.Thread(target=human); t.start()
@@ -97,7 +98,8 @@ def test_page_approval_cannot_authorize_a_different_purchase():
     store, paid = ApprovalStore(), []
     aid = store.request(fingerprint("localhost", 140, "USD", "chair", 1, 140))
     audit.add_pending(aid, "localhost", "chair", 1, "140.00")
-    TestClient(approvals_web.app).post("/decide", data={"aid": aid, "action": "approve"})
+    c = signed_in(approvals_web.app)
+    c.post("/decide", data={"aid": aid, "action": "approve", "csrf": c.csrf})
     assert audit.get_status(aid) == "approved"
     store.approve(aid)                                   # what agent.py does after the page says yes
     r = execute_purchase(ledger=Ledger(), store=store, policy=Policy(), url=SHOP, amount=280,

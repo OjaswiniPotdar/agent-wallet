@@ -3,7 +3,7 @@
 # PayPal is only believed after its data is checked against the intent: custom_id, order id,
 # amount, currency and (if PAYPAL_MERCHANT_ID is set) the payee. All money comparisons are Decimal.
 #
-# States used here: ORDER_CREATED, CAPTURE_CONFIRMED, FAILED, UNKNOWN, EXPIRED.
+# States used here: ORDER_CREATED, CAPTURE_CONFIRMED, FAILED, UNKNOWN, EXPIRED, CANCELLED.
 # CAPTURE_CONFIRMED is set ONLY from a real PayPal response (GET order / capture) or a webhook whose
 # signature PayPal itself verified. Nothing here invents a confirmation.
 import json, os, sqlite3, threading, time, uuid
@@ -15,11 +15,12 @@ DB_PATH = os.environ.get("AUDIT_DB", str(Path(__file__).resolve().parent / "audi
 
 # legal transitions; anything else (e.g. a late PENDING event after COMPLETED) is ignored
 TRANSITIONS = {
-    "ORDER_CREATED": {"CAPTURE_CONFIRMED", "FAILED", "UNKNOWN", "EXPIRED"},
+    "ORDER_CREATED": {"CAPTURE_CONFIRMED", "FAILED", "UNKNOWN", "EXPIRED", "CANCELLED"},
     "UNKNOWN": {"ORDER_CREATED", "CAPTURE_CONFIRMED", "FAILED"},
     # a verified, matching capture is the truth even if we had given up on the order
     "FAILED": {"CAPTURE_CONFIRMED"},
     "EXPIRED": {"CAPTURE_CONFIRMED"},
+    "CANCELLED": {"CAPTURE_CONFIRMED"},     # buyer cancelled on PayPal; nothing was captured
     "CAPTURE_CONFIRMED": set(),
 }
 
@@ -191,6 +192,15 @@ def reconcile(store: IntentStore, intent_id: str, get_order) -> dict:
     moved = store.transition(intent_id, state, cap_id, detail)
     return {"ok": moved, "result": state if moved else "TRANSITION_REFUSED", "paypal_status": order.get("status"),
             "state": store.get(intent_id)["state"], "detail": detail}
+
+def cancel(store: IntentStore, intent_id: str, get_order) -> dict:
+    """Buyer came back through cancel_url. Reconcile first: only an order PayPal still shows as
+    not approved and not captured is marked CANCELLED."""
+    rec = reconcile(store, intent_id, get_order)
+    if rec.get("paypal_status") in ("CREATED", "SAVED", "PAYER_ACTION_REQUIRED"):
+        store.transition(intent_id, "CANCELLED", detail="buyer cancelled on PayPal")
+        return dict(rec, ok=True, result="CANCELLED", state="CANCELLED")
+    return rec
 
 def capture(store: IntentStore, intent_id: str, get_order, capture_order) -> dict:
     """Real sandbox capture, guarded: the order must match the intent and be APPROVED by the buyer.

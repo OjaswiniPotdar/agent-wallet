@@ -5,6 +5,7 @@ import json, threading
 from decimal import Decimal
 import httpx, pytest
 from fastapi.testclient import TestClient
+from web_login import signed_in
 import agent, approvals_web, audit, lifecycle, paypal, payments
 from approval import ApprovalStore
 from executor import execute_purchase
@@ -250,14 +251,15 @@ def test_webhook_route_has_no_bypass(store, monkeypatch):
     monkeypatch.setattr(approvals_web, "_verify", lambda h, e, w: True)
     r = c.post("/webhooks/paypal", content=event(), headers=HDRS)
     assert r.status_code == 200 and r.json()["result"] == "CAPTURE_CONFIRMED"
-    assert "CAPTURE_CONFIRMED" in c.get("/").text
+    assert "CAPTURE_CONFIRMED" in signed_in(approvals_web.app).get("/").text
     assert any(e["phase"] == "webhook" for e in audit.events())
 
 # ---------------- --real-orders wiring ----------------
 
 def test_real_orders_records_intent_and_is_not_paid(tmp_path):
     seen = {}
-    def fake_create(amount, desc, rid, custom_id=None, currency="USD"):
+    def fake_create(amount, desc, rid, custom_id=None, currency="USD", **urls):
+        seen["urls"] = urls
         seen.update(amount=amount, rid=rid, custom_id=custom_id, currency=currency)
         return {"id": "ORDERX", "status": "CREATED", "links": [{"rel": "payer-action", "href": "https://sandbox.example/pay"}]}
     intents = lifecycle.IntentStore()

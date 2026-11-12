@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from policy import Policy, extract_host
 from approval import ApprovalStore, money
-from ledger import Ledger
+from ledger import Ledger, SqliteLedger
 from executor import execute_purchase, PayOutcome, PaymentUnknown
 from payments import execute_payment
 
@@ -66,9 +66,13 @@ def make_pay(real_orders: bool, create_order=None, intents=None):
             from lifecycle import IntentStore
             rid = request_id or str(uuid.uuid4())
             try:
+                iid = (intent or {}).get("intent_id")
+                back = os.environ.get("PAYPAL_RETURN_BASE", "http://localhost:8002").rstrip("/")
+                urls = ({"return_url": f"{back}/paypal/return?intent={iid}",
+                         "cancel_url": f"{back}/paypal/cancel?intent={iid}"} if iid else {})
                 order = (create_order or paypal.create_order)(
-                    amount, desc, rid, custom_id=(intent or {}).get("intent_id"),
-                    currency=(intent or {}).get("currency", "USD"))
+                    amount, desc, rid, custom_id=iid,
+                    currency=(intent or {}).get("currency", "USD"), **urls)
             except (httpx.TimeoutException, httpx.TransportError) as e:
                 # creating an order moves no money; same request id on retry returns the same order
                 raise PaymentUnknown(f"{type(e).__name__} creating order; retry with the same request id")
@@ -103,7 +107,10 @@ class _Log(list):
 class RunState:
     def __init__(self, mode, policy, real_orders, audit_sink=None):
         self.mode, self.policy, self.real_orders = mode, policy, real_orders
-        self.ledger, self.store = Ledger(), ApprovalStore()
+        # LEDGER_DB=<path>: persistent budget shared by every run and process (default: in memory per run)
+        db = os.environ.get("LEDGER_DB")
+        self.ledger = SqliteLedger(db, os.environ.get("LEDGER_ACCOUNT", "default")) if db and mode == "protected" else Ledger()
+        self.store = ApprovalStore()
         self.baseline_spent = Decimal("0")
         self.pay = make_pay(real_orders)
         self.run_id = uuid.uuid4().hex[:8]
@@ -268,12 +275,14 @@ def run_agent(task: str, mode: str = "protected", real_orders: bool = False,
 if __name__ == "__main__":
     flags = {"--real-orders", "--web-approve"}
     args = [a for a in sys.argv[1:] if a not in flags]
-    real = "--real-orders" in sys.argv[1:]          # create REAL sandbox orders (capture stays simulated)
+    real = "--real-orders" in sys.argv[1:]          # REAL sandbox orders; captured only after the buyer approves on PayPal
     web = "--web-approve" in sys.argv[1:]           # human decides on http://localhost:8002 instead of the terminal
     mode = args[0] if args else "protected"
     task = " ".join(args[1:]) or "Buy the standing desk from http://localhost:8001/product/desk"
     import audit
     human = (web_approver if web else cli_approver) if mode == "protected" else None
+    import time
+    started = time.time()
     out = run_agent(task, mode, real_orders=real, approver=human, audit_sink=audit.log_event)
     print("MODE:", out["mode"])
     for entry in out["log"]:
@@ -283,3 +292,11 @@ if __name__ == "__main__":
     for line in final_outcomes(out["log"]):
         print("  -", line)
     print("SUMMARY (written by the model before any human decision; may be out of date):", out["summary"])
+    if real:
+        import time as _t
+        from lifecycle import IntentStore
+        fresh = [i for i in IntentStore().all(20) if i["created"] > started and i["state"] == "ORDER_CREATED"]
+        for i in fresh:
+            print(f"\nPAYPAL SANDBOX: order {i['order_id']} for {i['quantity']} x {i['product_id']} ${i['total']} is NOT paid yet.")
+            print(f"  Buyer approval (log in with a SANDBOX personal account): {i['approve_url']}")
+            print("  After approving, PayPal returns you to http://localhost:8002/paypal/return, which reconciles and captures.")

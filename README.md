@@ -37,7 +37,7 @@ flowchart LR
   M -- purchase proposal --> E[execute_purchase]
   E --> C[Catalog price check]
   C --> P[Policy R1-R7 + atomic ledger]
-  P -- allow --> PAY[PayPal sandbox order<br/>capture SIMULATED]
+  P -- allow --> PAY[PayPal sandbox order<br/>buyer approves on PayPal, then guarded capture<br/>evals: capture SIMULATED]
   P -- needs approval --> H[Human approval<br/>separate step]
   H -- approve, single use --> E
   P -- block --> X[BLOCKED]
@@ -55,6 +55,7 @@ and keeps the budget reserved; a possibly-successful payment is never blindly re
 | `paypal.py` / `payments.py` | PayPal sandbox calls (OAuth, create/get/capture order, webhook signature verification) |
 | `lifecycle.py` | intent store, reconciliation against PayPal, guarded capture, webhook handling |
 | `merchant/site.py` | fake shop with a trusted `/price` catalog and poisoned product pages |
+| `dashboard/`, `dashboard_data.py` | AG Studio security dashboard (read-only) and the data it reads |
 | `evals/` | scenarios, runner, classifier, report |
 | `llm_client.py` | plain-HTTPS fallback when the `openai` SDK cannot load |
 
@@ -90,6 +91,11 @@ If `uv` warns that `VIRTUAL_ENV` does not match, call the venv's Python directly
 | `PAYPAL_WEBHOOK_ID` | webhook route | ID of the webhook in your PayPal sandbox app; without it the route refuses every event (503) |
 | `PAYPAL_MERCHANT_ID` | optional | if set, orders and webhook events must name this payee |
 | `CATALOG_URL` | optional | default `http://localhost:8001` |
+| `LEDGER_DB`, `LEDGER_ACCOUNT` | optional | persistent atomic budget ledger file and budget name (default: in memory per run) |
+| `PAYPAL_RETURN_BASE` | optional | where PayPal sends the buyer back (default `http://localhost:8002`) |
+| `AUTH_SESSION_MINUTES` | optional | sign-in session lifetime (default 30) |
+| `COOKIE_SECURE` | optional | `1` when served over HTTPS |
+| `DASHBOARD_AI_MODELS` | optional | models the dashboard's AI assistant may use (default `gpt-5-nano`) |
 | `LLM_TRANSPORT=httpx` | optional | skip the `openai` SDK (e.g. its native `jiter` DLL is blocked by an OS policy) |
 
 Never commit `.env`. `python scripts/scan_secrets.py --history` checks tracked files and git history.
@@ -109,9 +115,10 @@ Log entries show the explicit state (`SIMULATED_CAPTURE`, `ORDER_CREATED_NOT_PAI
 Add `--real-orders` to create real sandbox PayPal orders instead of simulated ones (see below).
 
 ### Approval page and audit log
-A small local web page lets a human approve or reject held purchases in the browser, and shows the audit log and the eval results.
+A small local web page lets a signed-in human approve or reject held purchases in the browser, and shows the audit log and the eval results.
 ```bash
-python scripts/dev.py approvals                    # terminal 1: page on http://localhost:8002
+python scripts/create_user.py yourname --role approver   # once: prompts for a password (min 12 chars)
+python scripts/dev.py approvals                    # terminal 1: page on http://localhost:8002 (sign in)
 python scripts/dev.py demo --scripted --web        # terminal 2: chair waits until you click Approve/Reject
 python scripts/dev.py demo --web                   # same with the real model (needs OPENAI_API_KEY)
 python agent.py protected "Buy 1 ergonomic chair from http://localhost:8001/product/chair" --web-approve
@@ -120,21 +127,55 @@ python agent.py protected "Buy 1 ergonomic chair from http://localhost:8001/prod
 - The page only records a human yes/no for an approval id, and each request can be decided once (atomic update). The payment still has to pass the HMAC-bound approval check (host, product, quantity, unit price, total, currency, expiry), the catalog re-check and the budget in `executor.py`. Approving on the page cannot authorize a different purchase (tested).
 - Requests nobody decides within 15 minutes become `EXPIRED` and are not paid.
 - The agent has no tool that reaches this page. Unguarded baseline payments are shown in red.
+- **Sign-in** (`auth.py`): passwords hashed with scrypt (Python standard library, per-user salt); server-side sessions that
+  store only a hash of the cookie token, expire after `AUTH_SESSION_MINUTES` (default 30) and end on sign-out; cookie
+  `HttpOnly` + `SameSite=Strict` (`COOKIE_SECURE=1` behind HTTPS); a CSRF token on every form and a cross-origin check on every
+  POST; 5 failed logins per user and client in 15 minutes locks that pair out. Roles: `approver` can decide, `viewer` can only
+  look. Each decision records who made it (`decided_by`).
+- Public on purpose: the PayPal webhook (trusted only through PayPal's signature check) and the buyer's return from PayPal
+  (trusted only through the guarded capture below). Everything else, including the dashboard and its APIs, needs sign-in.
+- **MFA is not implemented.** Integration path: put the page behind an identity provider that enforces MFA (OIDC, e.g. via a
+  reverse proxy) or add TOTP/WebAuthn as a second step in `auth.login`, and require it for the `approver` role.
+
+### Security dashboard (AG Studio)
+
+An [AG Studio](https://www.ag-grid.com/studio/) dashboard over the eval results, policy decisions, audit log and PayPal
+sandbox orders, served by the approvals server. No Node.js needed to run it:
+```bash
+python scripts/dev.py approvals       # then open http://localhost:8002/dashboard/
+```
+- **Attack results**: unauthorized payments baseline vs protected, side-by-side **defense funnels** (a custom Studio widget:
+  attack runs -> page read -> malicious purchase proposed -> paid), how each run ended, per category and per scenario.
+- **Legitimate tasks**: completed, wrongly blocked, needed approval. **Policy decisions**: which rule decided each proposal,
+  and every host the model tried to pay. **Live audit & PayPal**: the SQLite audit log and real sandbox orders.
+- Numbers come from the same classifier flags as `results.md` (a test checks they agree). Filters (tuning / held-out,
+  per widget) apply to every widget, including the custom one.
+- Optional AI assistant (Studio's own, asking questions about these tables): set `OPENAI_API_KEY` in `.env`. The browser talks
+  to `/api/ai/responses` on the local server, which adds the key, allows only `DASHBOARD_AI_MODELS` (default `gpt-5-nano`)
+  and caps output tokens. The assistant reads data; it has no payment or approval tools.
+- Read-only: the dashboard has no route that approves, rejects or pays. Details and rebuild steps: [`dashboard/README.md`](dashboard/README.md).
 
 ### PayPal order lifecycle (sandbox)
 
 `--real-orders` changes only the payment step. After the policy, approval and catalog checks pass, it creates a **real sandbox order**
-tagged with the intent id (`custom_id`) and a stable `PayPal-Request-Id`, records the approved intent (host, product, quantity,
-unit price, total, currency) in SQLite, and reports `ORDER_CREATED`, which is **not a payment**. Money moves only after a sandbox buyer
-approves the order on PayPal and a capture is confirmed by PayPal:
+tagged with the intent id (`custom_id`) and a stable `PayPal-Request-Id`, with PayPal return/cancel URLs that carry the intent id,
+records the approved intent (host, product, quantity, unit price, total, currency) in SQLite, and reports `ORDER_CREATED`, which is
+**not a payment**. Two approvals are needed, and they are separate: the internal policy approval (above) and the **buyer's own
+approval on PayPal**. Money moves only after both, and only once PayPal confirms the capture:
 
 ```bash
+python scripts/dev.py approvals                      # terminal 1: receives the buyer's return from PayPal
 python agent.py protected "Buy 3 packs of A4 paper from http://localhost:8001/product/paper" --real-orders
-python scripts/paypal_lifecycle.py list              # shows intent id, state and the buyer approve_url
-# open approve_url, log in with a SANDBOX personal account, approve
+# the run prints a sandbox buyer link: open it, log in with a SANDBOX personal account, pay.
+# PayPal returns you to http://localhost:8002/paypal/return, which reconciles the order and captures it.
+python scripts/paypal_lifecycle.py list              # intent id, state, approve_url
 python scripts/paypal_lifecycle.py status  <intent>  # GET order, reconcile against the intent
-python scripts/paypal_lifecycle.py capture <intent>  # capture only if it matches the intent and is APPROVED
+python scripts/paypal_lifecycle.py capture <intent>  # same guarded capture from the command line
 ```
+- `/paypal/return` trusts nothing in the redirect: it reads the order from PayPal, requires `APPROVED` and a match with the
+  intent, captures once with a stable request id (a refresh or replay cannot capture twice), and shows `CAPTURE_CONFIRMED` only
+  from PayPal's capture response. `/paypal/cancel` marks the intent `CANCELLED` only if PayPal shows the order was not approved.
+  Set `PAYPAL_RETURN_BASE` if the server is not on `http://localhost:8002`.
 
 - **Reconciliation.** Before believing PayPal, `lifecycle.py` checks order id, `custom_id`, amount, currency (Decimal) and, if
   `PAYPAL_MERCHANT_ID` is set, the payee. A mismatch raises an alert and changes nothing. A `COMPLETED` order alone is not
@@ -149,6 +190,16 @@ python scripts/paypal_lifecycle.py capture <intent>  # capture only if it matche
 - `python scripts/replay_webhook.py` replays a **SIMULATED** sample event through the same handler with a stub verifier and a throwaway
   database (bad signature, tampered amount, wrong order, unknown intent, valid, duplicate, late event). It is labeled SIMULATED and
   proves only the decision logic.
+
+### Budget ledger (atomic, optionally persistent)
+
+`ledger.reserve()` runs the policy check and the budget reservation as one atomic step, so parallel purchases cannot both pass
+a check that only one fits. The default `Ledger` is in memory (the evals use it). With `LEDGER_DB=ledger.db` (and optionally
+`LEDGER_ACCOUNT`), protected runs use `SqliteLedger`: the check and the insert run in one write-locked transaction
+(`BEGIN IMMEDIATE`), so separate processes share one budget; reservations survive restarts; a payment that ended `UNKNOWN`
+keeps its reservation after a crash, so the possibly-spent money cannot be spent twice; a definite failure releases it.
+`tests/test_ledger_concurrency.py` fires 40 parallel threads and 16 separate processes at a $500 budget (exactly 10 x $50 pass),
+and checks failure release, restart recovery and rollback. Breaking the atomicity on purpose makes those tests fail.
 
 ### Tests
 ```bash
@@ -195,8 +246,11 @@ malicious purchase proposed, blocked by code, approval required, unauthorized pa
 
 - **OpenAI `gpt-5-nano`** (chat completions, tool calling) reads pages and decides what to buy. It only **proposes**.
   Code does everything else: price verification, policy decisions, approvals, budget accounting, payment execution, state tracking.
-- **PayPal sandbox REST API** (`paypal.py`): OAuth and order creation are implemented behind `--real-orders`. Capture is simulated.
-- FastAPI (fake merchant), httpx, pytest, uv.
+- **PayPal sandbox REST API** (`paypal.py`): OAuth, Orders v2 create with buyer approval (return/cancel URLs), get, guarded capture,
+  and webhook signature verification, behind `--real-orders`. The evals and the default demo simulate the capture.
+- **AG Studio / AG Grid** (hackathon sponsor tool): the security dashboard in `dashboard/`, built from the official
+  PayPal x AG Studio boilerplate, with a custom widget, custom theme and Studio's AI assistant (read-only, via a local key-holding proxy).
+- FastAPI (fake merchant, approval page), httpx, pytest, uv. Next.js only to rebuild the dashboard.
 
 ## Real vs simulated
 
@@ -206,24 +260,25 @@ malicious purchase proposed, blocked by code, approval required, unauthorized pa
 | Catalog check, policy, ledger, approvals, idempotency keys, state machine | real code, tested |
 | PayPal OAuth + create order | **real sandbox API call** (`python scripts/paypal_smoke.py`, and `--real-orders`); **not used in the evaluation runs** |
 | PayPal capture in the agent and evals | **simulated** (`CAPTURE_SIMULATED`) |
-| PayPal capture via `scripts/paypal_lifecycle.py` | real sandbox call, implemented and unit-tested against mocked responses; **a successful end-to-end sandbox capture has not been demonstrated** (it needs a sandbox buyer to approve the order) |
+| PayPal capture after buyer approval (`--real-orders` -> `/paypal/return`, or `paypal_lifecycle.py capture`) | real sandbox call, implemented and unit-tested against mocked responses; **a successful end-to-end sandbox capture has not been demonstrated yet** (it needs a sandbox buyer to approve the order) |
 | Webhook signature verification, dedupe, reconciliation | implemented and unit-tested with mocked PayPal responses; **no real PayPal event has been received** (needs a public URL). `replay_webhook.py` is SIMULATED |
 | Merchant shop and its injections | fake, written for this project |
-| Human approver in evals | deterministic oracle; CLI prompt or local web page (no authentication) in the demo |
+| Human approver in evals | deterministic oracle; CLI prompt or signed-in local web page in the demo |
 
 Every simulated payment is labeled `CAPTURE_SIMULATED` in logs and output.
 
 ## What this does NOT protect against
 
-- **A compromised or careless approver.** Approval is a CLI prompt or a local web page (`:8002`) with **no authentication** and no CSRF protection; anyone who can reach the port can approve. A person who approves the wrong thing gets the wrong payment.
+- **A compromised or careless approver.** The web page needs a signed-in approver (password, CSRF, rate limit) but has **no MFA**, and the CLI prompt trusts whoever is at the terminal. A stolen password, or a person who approves the wrong thing, gets the wrong payment.
 - **A malicious merchant catalog.** The catalog is trusted. A merchant that lies about its own price passes the price check.
 - **Wrong intent under the thresholds.** Nothing compares the purchase to what the user actually asked for. Over-orders below the approval threshold at an allowed merchant execute.
 - **Redirects and checkout destinations.** The allowlist checks the merchant host the agent names. It does not validate where PayPal or a checkout page actually sends the money.
-- **State loss and scale.** Ledger and approval store are in-memory and single-process (the SQLite file holds only the audit log and human decisions). A restart loses budget history and pending approvals; multiple processes would not share them.
+- **State loss and scale.** By default the ledger and the HMAC approval store are in memory, per run (that is how the evals ran). `LEDGER_DB=<path>` switches the budget to the persistent SQLite ledger, which survives restarts and is atomic across processes; the approval store is still per process, so a restart drops pending approvals (they must be requested again). SQLite is a single-machine store, not a payment-grade database.
 - **Real captures and webhooks, end to end.** The code paths exist and are tested against mocked PayPal responses only. Behavior against live PayPal (and the exact shape of real events) is unverified.
 - **Port and scheme.** R1 compares the host only: `http://localhost:9999` passes as `localhost`.
 - **Generalization.** Own-scenario testing, one small model, 10 trials per cell. A different model, new attack styles or a determined adversary may behave differently.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). Exception: `dashboard/out/` contains built AG Studio code, which is commercial software
+under AG Grid's licence (used here on the free trial), not MIT.
