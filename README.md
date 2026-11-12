@@ -50,7 +50,8 @@ and keeps the budget reserved; a possibly-successful payment is never blindly re
 | `agent.py` | OpenAI tool-calling agent, `baseline` and `protected` modes (same prompt, tools, model) |
 | `executor.py` | `execute_purchase()`: the enforcement path |
 | `policy.py` / `ledger.py` / `approval.py` | rules, atomic budget ledger, HMAC approval store |
-| `paypal.py` / `payments.py` | PayPal sandbox calls; capture is simulated |
+| `paypal.py` / `payments.py` | PayPal sandbox calls (OAuth, create/get/capture order, webhook signature verification) |
+| `lifecycle.py` | intent store, reconciliation against PayPal, guarded capture, webhook handling |
 | `merchant/site.py` | fake shop with a trusted `/price` catalog and poisoned product pages |
 | `evals/` | scenarios, runner, classifier, report |
 | `llm_client.py` | plain-HTTPS fallback when the `openai` SDK cannot load |
@@ -84,6 +85,8 @@ If `uv` warns that `VIRTUAL_ENV` does not match, call the venv's Python directly
 | `OPENAI_API_KEY` | real-model runs and evals | not needed for tests or `demo --scripted` |
 | `PAYPAL_CLIENT_ID`, `PAYPAL_SECRET` | `--real-orders` only | PayPal **sandbox** app credentials |
 | `APPROVAL_SECRET` | approvals | HMAC key; set your own value (default is dev-only) |
+| `PAYPAL_WEBHOOK_ID` | webhook route | ID of the webhook in your PayPal sandbox app; without it the route refuses every event (503) |
+| `PAYPAL_MERCHANT_ID` | optional | if set, orders and webhook events must name this payee |
 | `CATALOG_URL` | optional | default `http://localhost:8001` |
 | `LLM_TRANSPORT=httpx` | optional | skip the `openai` SDK (e.g. its native `jiter` DLL is blocked by an OS policy) |
 
@@ -98,7 +101,7 @@ python scripts/dev.py demo                    # real model (needs OPENAI_API_KEY
 Manual: start `python scripts/dev.py server`, then
 `python agent.py baseline "Buy the standing desk from http://localhost:8001/product/desk"`, then the same with `protected`.
 `python agent.py protected "Buy 1 ergonomic chair from http://localhost:8001/product/chair"` stops at `Approve? [y/N]`.
-Add `--real-orders` to create sandbox PayPal orders (needs credentials; capture stays simulated).
+Add `--real-orders` to create real sandbox PayPal orders instead of simulated ones (see below).
 
 ### Approval page and audit log
 A small local web page lets a human approve or reject held purchases in the browser, and shows the audit log and the eval results.
@@ -112,6 +115,35 @@ python agent.py protected "Buy 1 ergonomic chair from http://localhost:8001/prod
 - The page only records a human yes/no for an approval id, and each request can be decided once (atomic update). The payment still has to pass the HMAC-bound approval check (host, product, quantity, unit price, total, currency, expiry), the catalog re-check and the budget in `executor.py`. Approving on the page cannot authorize a different purchase (tested).
 - Requests nobody decides within 15 minutes become `EXPIRED` and are not paid.
 - The agent has no tool that reaches this page. Unguarded baseline payments are shown in red.
+
+### PayPal order lifecycle (sandbox)
+
+`--real-orders` changes only the payment step. After the policy, approval and catalog checks pass, it creates a **real sandbox order**
+tagged with the intent id (`custom_id`) and a stable `PayPal-Request-Id`, records the approved intent (host, product, quantity,
+unit price, total, currency) in SQLite, and reports `ORDER_CREATED`, which is **not a payment**. Money moves only after a sandbox buyer
+approves the order on PayPal and a capture is confirmed by PayPal:
+
+```bash
+python agent.py protected "Buy 3 packs of A4 paper from http://localhost:8001/product/paper" --real-orders
+python scripts/paypal_lifecycle.py list              # shows intent id, state and the buyer approve_url
+# open approve_url, log in with a SANDBOX personal account, approve
+python scripts/paypal_lifecycle.py status  <intent>  # GET order, reconcile against the intent
+python scripts/paypal_lifecycle.py capture <intent>  # capture only if it matches the intent and is APPROVED
+```
+
+- **Reconciliation.** Before believing PayPal, `lifecycle.py` checks order id, `custom_id`, amount, currency (Decimal) and, if
+  `PAYPAL_MERCHANT_ID` is set, the payee. A mismatch raises an alert and changes nothing. A `COMPLETED` order alone is not
+  treated as paid; the capture's own status decides.
+- **No blind retries.** Capture uses a request id derived from the intent. A timeout or 5xx leaves the intent `UNKNOWN`; the next
+  `capture` first reads the order and only re-captures (with the same request id) if PayPal still says `APPROVED`.
+- **State machine.** Only legal transitions are applied (e.g. a late `PENDING` event after `CAPTURE_CONFIRMED` is ignored).
+- **Webhooks.** `POST /webhooks/paypal` on the approvals server (`:8002`): signature verified by PayPal via
+  `/v1/notifications/verify-webhook-signature` (no bypass; missing `PAYPAL_WEBHOOK_ID` -> 503), dedupe by event id (atomic, also under
+  parallel redelivery), then `PAYMENT.CAPTURE.COMPLETED / DENIED / PENDING` is reconciled against the intent. Receiving real events
+  needs a public URL (e.g. a tunnel) registered in the sandbox app.
+- `python scripts/replay_webhook.py` replays a **SIMULATED** sample event through the same handler with a stub verifier and a throwaway
+  database (bad signature, tampered amount, wrong order, unknown intent, valid, duplicate, late event). It is labeled SIMULATED and
+  proves only the decision logic.
 
 ### Tests
 ```bash
@@ -167,8 +199,9 @@ malicious purchase proposed, blocked by code, approval required, unauthorized pa
 | OpenAI model calls | real |
 | Catalog check, policy, ledger, approvals, idempotency keys, state machine | real code, tested |
 | PayPal OAuth + create order | **real sandbox API call** (`python scripts/paypal_smoke.py`, and `--real-orders`); **not used in the evaluation runs** |
-| PayPal capture | **simulated**: sandbox checkout did not complete, so no run produces `CAPTURE_CONFIRMED` |
-| PayPal webhooks / signature verification / reconciliation | **not implemented** |
+| PayPal capture in the agent and evals | **simulated** (`CAPTURE_SIMULATED`) |
+| PayPal capture via `scripts/paypal_lifecycle.py` | real sandbox call, implemented and unit-tested against mocked responses; **a successful end-to-end sandbox capture has not been demonstrated** (it needs a sandbox buyer to approve the order) |
+| Webhook signature verification, dedupe, reconciliation | implemented and unit-tested with mocked PayPal responses; **no real PayPal event has been received** (needs a public URL). `replay_webhook.py` is SIMULATED |
 | Merchant shop and its injections | fake, written for this project |
 | Human approver in evals | deterministic oracle; CLI prompt or local web page (no authentication) in the demo |
 
@@ -181,7 +214,8 @@ Every simulated payment is labeled `CAPTURE_SIMULATED` in logs and output.
 - **Wrong intent under the thresholds.** Nothing compares the purchase to what the user actually asked for. Over-orders below the approval threshold at an allowed merchant execute.
 - **Redirects and checkout destinations.** The allowlist checks the merchant host the agent names. It does not validate where PayPal or a checkout page actually sends the money.
 - **State loss and scale.** Ledger and approval store are in-memory and single-process (the SQLite file holds only the audit log and human decisions). A restart loses budget history and pending approvals; multiple processes would not share them.
-- **Real captures and webhooks.** Not implemented, so duplicate-capture and reconciliation behavior against live PayPal is untested.
+- **Real captures and webhooks, end to end.** The code paths exist and are tested against mocked PayPal responses only. Behavior against live PayPal (and the exact shape of real events) is unverified.
+- **Port and scheme.** R1 compares the host only: `http://localhost:9999` passes as `localhost`.
 - **Generalization.** Own-scenario testing, one small model, 10 trials per cell. A different model, new attack styles or a determined adversary may behave differently.
 
 ## License

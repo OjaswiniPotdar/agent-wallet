@@ -95,6 +95,9 @@ def execute_purchase(*, ledger, store, policy, url, amount, currency, product_id
     rid = str(uuid.uuid5(uuid.NAMESPACE_URL,
                          "agent-wallet:" + (intent_id or approval_id or uuid.uuid4().hex)))
     kw = {"request_id": rid} if getattr(pay, "wants_request_id", False) else {}
+    if getattr(pay, "wants_intent", False):   # the validated intent, so a real order can be reconciled later
+        kw["intent"] = {"intent_id": rid, "host": host, "product_id": product_id, "quantity": quantity,
+                        "unit": str(unit), "total": str(total), "currency": currency.upper()}
     try:
         out = pay(str(total), product_id, **kw)
     except PaymentUnknown as e:

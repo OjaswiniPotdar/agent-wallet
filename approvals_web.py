@@ -7,6 +7,8 @@ from pathlib import Path
 from urllib.parse import parse_qs
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from dotenv import load_dotenv
+load_dotenv()
 import audit
 
 ROOT = Path(__file__).resolve().parent
@@ -23,7 +25,7 @@ h1{font-size:20px;margin:0 0 4px}h2{font-size:16px;margin:28px 0 8px}
 table{border-collapse:collapse;width:100%;font-size:13px}th,td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
 th{color:var(--mute);font-weight:600}.wrap{overflow-x:auto}
 .s-BLOCKED,.s-REJECTED,.s-FAILED,.s-rejected,.s-expired,.s-EXPIRED{color:var(--bad);font-weight:600}
-.s-CAPTURE_SIMULATED,.s-approved,.s-consumed{color:var(--ok);font-weight:600}.s-NEEDS_APPROVAL,.s-pending,.s-UNKNOWN{color:var(--warn);font-weight:600}
+.s-CAPTURE_SIMULATED,.s-CAPTURE_CONFIRMED,.s-approved,.s-consumed{color:var(--ok);font-weight:600}.s-NEEDS_APPROVAL,.s-pending,.s-UNKNOWN,.s-ORDER_CREATED{color:var(--warn);font-weight:600}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin:8px 0;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
 .amt{font-size:18px;font-weight:700}button{font:inherit;padding:6px 14px;border-radius:6px;border:1px solid var(--line);cursor:pointer}
 .ap{background:var(--ok);color:#fff;border:0}.rj{background:var(--bad);color:#fff;border:0}
@@ -68,15 +70,27 @@ def index():
                  f"<td>{e(r['host'])}</td><td>${e(r['amount'])}</td>{_state_cell(r)}"
                  f"<td>{e(r['rule'] or r['status'])}</td><td>{e((r['approval_id'] or '')[:8])}</td><td class=note>{e(r['detail'])}</td></tr>"
                  for r in audit.events(100))
+    import lifecycle
+    try:
+        its = lifecycle.IntentStore().all(20)
+    except Exception:
+        its = []
+    intents = "".join(f"<tr><td>{ts(i['created'])}</td><td>{e(i['product_id'])} x{e(i['quantity'])}</td><td>{e(i['host'])}</td>"
+                      f"<td>${e(i['total'])} {e(i['currency'])}</td><td>{e(i['order_id'])}</td><td class='s-{e(i['state'])}'>{e(i['state'])}</td>"
+                      f"<td class=note>{e(i['alert'] or i['detail'])}</td></tr>" for i in its) \
+        or "<tr><td colspan=7 class=note>No real sandbox orders yet (they come from <code>--real-orders</code>).</td></tr>"
     auto = "<meta http-equiv=refresh content=3>"
     return f"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>Agent Wallet Approvals</title>{auto}<style>{STYLE}</style></head><body>
 <h1>Agent Wallet: human approvals</h1>
 <div class=banner><b>Local demo.</b> No authentication: anyone who can reach this port can approve.
-Payments are <b>SIMULATED</b> (capture is never real). Approving here only records your decision; the purchase still
+In the agent and the evals, payments are <b>SIMULATED</b> (<code>CAPTURE_SIMULATED</code>). A real sandbox capture only happens via <code>scripts/paypal_lifecycle.py capture</code> after a buyer approved the order on PayPal. Approving here only records your decision; the purchase still
 has to pass the HMAC-bound approval check, catalog re-check and budget in <code>executor.py</code>.</div>
 <h2>Waiting for you ({len(pend)})</h2>{cards}
 <h2>Recent decisions</h2><div class=wrap><table><tr><th>requested</th><th>item</th><th>host</th><th>total</th><th>decision</th><th>decided</th></tr>{dec}</table></div>
+<h2>PayPal sandbox orders (reconciled against the approved intent)</h2>
+<p class=note>CAPTURE_CONFIRMED appears only from a real PayPal API response or a webhook PayPal verified. ORDER_CREATED is not a payment.</p>
+<div class=wrap><table><tr><th>created</th><th>item</th><th>host</th><th>total</th><th>PayPal order</th><th>state</th><th>alert / detail</th></tr>{intents}</table></div>
 <h2>Audit log (latest 100)</h2><div class=wrap><table><tr><th>time</th><th>mode</th><th>phase</th><th>item</th><th>host</th><th>amount</th><th>state</th><th>rule</th><th>approval</th><th>detail</th></tr>{ev}</table></div>
 <h2>Evaluation results (raw counts, gpt-5-nano, N=10 per cell)</h2>
 <p class=note>Small custom suite, not a proof of security. "agent never attempted" = model resistance, not the guard.</p>
@@ -95,3 +109,31 @@ async def decide_route(request: Request):
 @app.get("/api/pending")
 def api_pending():
     return audit.pending()
+
+# ---- PayPal webhooks: signature verified BY PAYPAL, deduped by event id, reconciled vs the intent ----
+# This route is unauthenticated on purpose (PayPal calls it); trust comes only from the signature
+# check against PAYPAL_WEBHOOK_ID. There is no bypass flag. Needs a public URL to receive real events.
+from fastapi.responses import JSONResponse
+
+def _verify(headers, event, webhook_id):
+    import paypal
+    return paypal.verify_webhook_signature(headers, event, webhook_id)
+
+@app.post("/webhooks/paypal")
+async def paypal_webhook(request: Request):
+    import os, lifecycle
+    body = await request.body()
+    code, res = lifecycle.handle_webhook(lifecycle.IntentStore(), dict(request.headers), body,
+                                         verify=_verify, webhook_id=os.environ.get("PAYPAL_WEBHOOK_ID"))
+    try:
+        audit.log_event({"phase": "webhook", "product_id": res.get("event_type"), "state": res.get("state"),
+                         "status": res.get("result"), "detail": "; ".join(res.get("problems", [])) or res.get("detail")},
+                        "webhook", res.get("intent_id") or "")
+    except Exception:
+        pass                                         # auditing never changes the webhook answer
+    return JSONResponse(res, status_code=code)
+
+@app.get("/api/intents")
+def api_intents():
+    import lifecycle
+    return lifecycle.IntentStore().all()

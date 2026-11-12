@@ -56,24 +56,36 @@ def price_lookup(pid: str):
     r.raise_for_status()
     return r.json()["price"]
 
-def make_pay(real_orders: bool):
-    def pay(amount: str, desc: str, request_id=None):
-        order_id, detail = f"SIMULATED-{uuid.uuid4().hex[:8]}", "order and capture SIMULATED"
+def make_pay(real_orders: bool, create_order=None, intents=None):
+    def pay(amount: str, desc: str, request_id=None, intent=None):
         if real_orders:
-            from paypal import create_order
+            # REAL sandbox order, tagged with the intent id (custom_id) and a stable request id.
+            # No capture here: the buyer must approve on PayPal first, then
+            # `python scripts/paypal_lifecycle.py capture <intent_id>` captures and reconciles.
+            import paypal
+            from lifecycle import IntentStore
+            rid = request_id or str(uuid.uuid4())
             try:
-                order_id = create_order(amount, desc, request_id or str(uuid.uuid4()))["id"]
+                order = (create_order or paypal.create_order)(
+                    amount, desc, rid, custom_id=(intent or {}).get("intent_id"),
+                    currency=(intent or {}).get("currency", "USD"))
             except (httpx.TimeoutException, httpx.TransportError) as e:
-                raise PaymentUnknown(f"{type(e).__name__} creating order; check order state before retry")
+                # creating an order moves no money; same request id on retry returns the same order
+                raise PaymentUnknown(f"{type(e).__name__} creating order; retry with the same request id")
             except httpx.HTTPStatusError as e:
                 if e.response.status_code >= 500:
-                    raise PaymentUnknown(f"PayPal {e.response.status_code}; check order state before retry")
+                    raise PaymentUnknown(f"PayPal {e.response.status_code}; retry with the same request id")
                 raise
-            detail = "sandbox order REAL; capture SIMULATED"
-        cap = execute_payment(order_id, live=False)      # capture is simulated (sandbox checkout hung)
+            if intent:
+                (intents or IntentStore()).record(intent, order["id"], paypal.approve_link(order))
+            return PayOutcome(order["id"], "ORDER_CREATED",
+                              f"sandbox order REAL ({order.get('status')}); NOT paid until buyer approves and capture is confirmed")
+        order_id = f"SIMULATED-{uuid.uuid4().hex[:8]}"
+        cap = execute_payment(order_id, live=False)      # default path: order and capture SIMULATED
         assert cap.get("simulated"), "live capture is not wired into this path"
-        return PayOutcome(order_id, "CAPTURE_SIMULATED", detail)
+        return PayOutcome(order_id, "CAPTURE_SIMULATED", "order and capture SIMULATED")
     pay.wants_request_id = True
+    pay.wants_intent = True
     return pay
 
 class _Log(list):
@@ -145,6 +157,9 @@ def handle_purchase(raw, s: RunState) -> str:
         return f"BLOCKED by policy ({r.rule}): {r.detail}"
     if r.state == "CAPTURE_SIMULATED":
         return f"Order placed with {host} (capture simulated). Order {r.order_id}."
+    if r.state == "ORDER_CREATED":
+        return (f"ORDER_CREATED: PayPal sandbox order {r.order_id} created. NOT paid yet: the buyer must "
+                f"approve it on PayPal. Do not retry; tell the user.")
     return f"{r.state}: {r.status} {r.detail}. Not paid."
 
 def cli_approver(a) -> bool:
