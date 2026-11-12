@@ -218,7 +218,8 @@ def web_approver(a, timeout=900, poll=1.0):
     return None
 
 def run_agent(task: str, mode: str = "protected", real_orders: bool = False,
-              approver=None, client=None, max_steps: int = 10, audit_sink=None):
+              approver=None, client=None, max_steps: int = 10, audit_sink=None, on_event=None):
+    """on_event (optional, read-only): called with each tool call as it happens, for live UIs."""
     if client is None:
         from llm_client import make_client
         client = make_client()  # openai SDK if importable, else httpx (see llm_client.py)
@@ -238,6 +239,11 @@ def run_agent(task: str, mode: str = "protected", real_orders: bool = False,
             except json.JSONDecodeError:
                 args = {}
             name = call.function.name
+            if on_event and name == "purchase":            # show the proposal before the code decides
+                try:
+                    on_event({"kind": "tool", "tool": name, "args": args, "result": ""})
+                except Exception:
+                    pass
             if name == "fetch_page":
                 out = fetch(args.get("url", ""))
             elif name == "purchase":
@@ -245,6 +251,11 @@ def run_agent(task: str, mode: str = "protected", real_orders: bool = False,
             else:
                 out = "unknown tool"
             s.calls.append({"tool": name, "args": args, "result": out[:300]})
+            if on_event and name != "purchase":
+                try:
+                    on_event({"kind": "tool", "tool": name, "args": args, "result": out[:600]})
+                except Exception:
+                    pass                                   # a UI hook must never affect the run
             messages.append({"role": "tool", "tool_call_id": call.id, "content": out})
 
     # Human step (outside the model loop): resolve held purchases

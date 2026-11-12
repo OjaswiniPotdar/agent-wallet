@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="csrf" content="{{CSRF}}">
+<meta name="role" content="{{ROLE}}">
+<title>Agent Wallet console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ledger: #E7ECF2;      /* page */
+  --tape: #FFFFFF;        /* run lanes */
+  --ink: #14213D;         /* text, code's decisions */
+  --soft: #5D6B82;        /* secondary text */
+  --rule: #D3DAE4;
+  --model: #5B4BC4;       /* what the model did */
+  --paid-bad: #C62828;    /* money went somewhere it should not */
+  --blocked: #0F7B5F;     /* code stopped it / allowed and fine */
+  --held: #A86200;        /* waiting for a person */
+  --focus: #2457D6;
+  --font: "Public Sans", "Segoe UI", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --ledger:#0E1626; --tape:#16213A; --ink:#E6ECF5; --soft:#9AA8BE; --rule:#2A3756;
+          --model:#A99BFF; --paid-bad:#FF6B6B; --blocked:#4CD3A5; --held:#F2B04A; --focus:#7FA4FF; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--ledger); color: var(--ink); font: 15px/1.5 var(--font);
+  font-variant-numeric: tabular-nums; }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+button { font: inherit; cursor: pointer; }
+
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 24px; padding: 18px 28px 0; }
+header h1 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.01em; }
+header h1 small { font-weight: 500; color: var(--soft); font-size: 15px; margin-left: 8px; }
+header nav { margin-left: auto; display: flex; gap: 18px; font-size: 14px; color: var(--soft); }
+header nav a { text-decoration: none; border-bottom: 1px solid var(--rule); }
+header nav a:hover { color: var(--ink); border-color: var(--ink); }
+
+.task { padding: 18px 28px 22px; display: grid; gap: 12px; max-width: 1240px; }
+.presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.preset { border: 1px solid var(--rule); background: var(--tape); color: var(--ink); padding: 6px 12px;
+  border-radius: 999px; font-size: 14px; }
+.preset[aria-pressed="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.preset .k { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+.preset[data-kind="attack"] .k { background: var(--paid-bad); }
+.preset[data-kind="legit"] .k { background: var(--blocked); }
+.taskrow { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start; }
+textarea { width: 100%; min-height: 54px; resize: vertical; font: 17px/1.4 var(--font); color: var(--ink);
+  background: var(--tape); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; font-size: 14px; }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; background: var(--tape); }
+.seg button { border: 0; background: none; color: var(--soft); padding: 6px 12px; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--tape); }
+.check { display: inline-flex; gap: 6px; align-items: center; color: var(--soft); }
+.run { background: var(--ink); color: var(--tape); border: 0; border-radius: 6px; padding: 12px 22px;
+  font-weight: 700; font-size: 16px; white-space: nowrap; }
+.run:disabled { opacity: .5; cursor: progress; }
+.hint { color: var(--soft); font-size: 14px; min-height: 21px; }
+.msg { color: var(--paid-bad); font-weight: 600; font-size: 14px; }
+
+.lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 28px;
+  padding: 0 28px 48px; max-width: 1240px; }
+.lane { background: var(--tape); position: relative; padding: 22px 22px 26px; min-height: 380px;
+  --perf: radial-gradient(circle at 8px -2px, transparent 7px, var(--tape) 7.5px);
+  border-radius: 0 0 6px 6px; display: flex; flex-direction: column; }
+.lane[hidden] { display: none; }
+.lane::before { content: ""; position: absolute; left: 0; right: 0; top: -9px; height: 10px;
+  background: var(--perf); background-size: 16px 10px; }
+.lane h2 { margin: 0; font-size: 18px; font-weight: 800; }
+.lane .sub { color: var(--soft); font-size: 14px; margin: 2px 0 14px; }
+.empty { color: var(--soft); font-size: 14px; margin: auto 0; text-align: center; }
+ol.tape { list-style: none; margin: 0; padding: 0; border-top: 1px dashed var(--rule); }
+ol.tape li { display: grid; grid-template-columns: 46px 64px 1fr; gap: 10px; padding: 9px 0;
+  border-bottom: 1px dashed var(--rule); font-size: 14px; }
+.t { color: var(--soft); text-align: right; }
+.who { font-weight: 700; font-size: 13px; }
+.who.model { color: var(--model); }
+.who.code { color: var(--ink); }
+.who.human { color: var(--held); }
+.who.paypal { color: var(--focus); }
+.what b { font-weight: 700; }
+.what .detail { color: var(--soft); }
+.what details summary { color: var(--model); cursor: pointer; font-size: 13px; margin-top: 2px; }
+.what details pre { white-space: pre-wrap; word-break: break-word; font: 12.5px/1.45 var(--font);
+  background: var(--ledger); padding: 8px 10px; border-radius: 4px; margin: 6px 0 0; max-height: 220px; overflow: auto; }
+.tag { display: inline-block; font-weight: 700; font-size: 12.5px; padding: 1px 7px; border-radius: 3px;
+  border: 1.5px solid currentColor; margin-right: 6px; }
+.tag.bad { color: var(--paid-bad); } .tag.ok { color: var(--blocked); } .tag.hold { color: var(--held); }
+
+.approve { border: 2px solid var(--held); border-radius: 6px; padding: 12px 14px; margin: 14px 0 0; }
+.approve p { margin: 0 0 10px; }
+.approve button { border-radius: 6px; padding: 8px 16px; font-weight: 700; border: 0; margin-right: 8px; }
+.approve .yes { background: var(--blocked); color: #fff; } .approve .no { background: transparent; color: var(--paid-bad);
+  border: 1.5px solid var(--paid-bad); }
+.order { border: 2px solid var(--focus); border-radius: 6px; padding: 12px 14px; margin: 14px 0 0; }
+.order a.pay { display: inline-block; margin-top: 8px; background: var(--focus); color: #fff; text-decoration: none;
+  padding: 8px 14px; border-radius: 6px; font-weight: 700; }
+
+.verdict { margin-top: auto; padding-top: 18px; }
+.stamp { display: inline-block; border: 3px solid currentColor; border-radius: 6px; padding: 8px 14px 9px;
+  font-size: 24px; line-height: 1.15; font-weight: 800; letter-spacing: -0.01em; transform: rotate(-1.2deg); }
+.stamp small { display: block; font-size: 14px; font-weight: 600; letter-spacing: 0; margin-top: 2px; }
+.stamp.bad { color: var(--paid-bad); } .stamp.ok { color: var(--blocked); } .stamp.hold { color: var(--held); }
+.stamp.new { animation: stamp .35s cubic-bezier(.2,1.4,.4,1) both; }
+@keyframes stamp { from { transform: scale(1.25) rotate(-4deg); opacity: 0; } to { transform: rotate(-1.2deg); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .stamp.new { animation: none; } }
+.spent { color: var(--soft); font-size: 14px; margin-top: 10px; }
+.said { margin-top: 12px; font-size: 14px; color: var(--soft); }
+.said summary { cursor: pointer; color: var(--model); }
+.said blockquote { margin: 6px 0 0; padding-left: 10px; border-left: 3px solid var(--model); color: var(--ink); }
+.foot { padding: 0 28px 28px; color: var(--soft); font-size: 13px; max-width: 900px; }
+@media (max-width: 640px) {
+  header, .task, .lanes, .foot { padding-left: 16px; padding-right: 16px; }
+  .taskrow { grid-template-columns: 1fr; }
+  .lanes { grid-template-columns: 1fr; }
+  ol.tape li { grid-template-columns: 40px 1fr; } ol.tape li .who { grid-column: 2; }
+  ol.tape li .what { grid-column: 2; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Agent Wallet <small>The model proposes. Code decides.</small></h1>
+  <nav>
+    <span>Signed in as {{USER}} ({{ROLE}})</span>
+    <a href="/">Approvals and audit log</a>
+    <a href="/dashboard/">Results dashboard</a>
+  </nav>
+</header>
+
+<section class="task" aria-label="Task">
+  <div class="presets" id="presets" role="group" aria-label="Example tasks"></div>
+  <div class="taskrow">
+    <label><span class="hint" style="display:block;margin-bottom:4px">What should the shopping agent do?</span>
+      <textarea id="task" rows="2"></textarea></label>
+    <button class="run" id="run" type="button">Run task</button>
+  </div>
+  <div class="controls">
+    <span class="seg" role="group" aria-label="Which agent">
+      <button type="button" data-mode="compare" aria-pressed="true">Both side by side</button>
+      <button type="button" data-mode="baseline" aria-pressed="false">Unprotected only</button>
+      <button type="button" data-mode="protected" aria-pressed="false">Protected only</button>
+    </span>
+    <label class="check"><input type="checkbox" id="real"> Real PayPal sandbox order</label>
+  </div>
+  <div class="hint" id="hint"></div>
+  <div class="msg" id="msg" role="alert"></div>
+</section>
+
+<main class="lanes" id="lanes">
+  <section class="lane" data-lane="baseline"><h2>Unprotected agent</h2>
+    <p class="sub">Pays whatever the model proposes.</p><p class="empty">Pick a task and run it.</p></section>
+  <section class="lane" data-lane="protected"><h2>Protected by Agent Wallet</h2>
+    <p class="sub">Same model, prompt and tools. Every payment goes through the policy engine.</p>
+    <p class="empty">Pick a task and run it.</p></section>
+</main>
+
+<p class="foot">Unprotected and scripted payments are simulated. With "Real PayPal sandbox order", the protected agent creates a real
+PayPal sandbox order that is paid only after a sandbox buyer approves it on PayPal and PayPal confirms the capture. Sandbox money is not real.</p>
+
+<script>
+const CSRF = document.querySelector('meta[name=csrf]').content;
+const ROLE = document.querySelector('meta[name=role]').content;
+const ALLOWED = new Set(['localhost', 'officesupplies.test']);
+const RULES = {
+  R1_ALLOWLIST: 'merchant is not on the allowlist', R2_AMOUNT: 'invalid amount', R3_CAP: 'over the $150 per-purchase cap',
+  R4_BUDGET: 'over the $500 budget', R5_SPLIT: 'looks like a split purchase', R6_APPROVAL: 'over $75, a person must approve',
+  R7_DUPLICATE: 'repeat purchase, a person must approve', REJECT_PRICE_MISMATCH: "price doesn't match the merchant's own catalog",
+  REJECT_BAD_QUANTITY: 'invalid quantity', REJECT_CATALOG_UNAVAILABLE: 'catalog unreachable',
+  HUMAN_REJECTED: 'a person rejected it', APPROVAL_TIMEOUT: 'nobody approved in time',
+};
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = (a) => (a === undefined || a === null || a === '') ? '' : '$' + Number(a).toFixed(2);
+let state = { mode: 'compare', brain: 'model', preset: null, presets: [], modelReady: false, paypalReady: false };
+let polls = {};
+
+function pageText(html) {           // what the model read, minus markup, so the injection is visible
+  const d = document.createElement('div');
+  d.innerHTML = html.replace(/<!--([\s\S]*?)-->/g, ' [hidden comment: $1] ').replace(/<\/(h\d|p|div|li|tr)>|<br\s*\/?>/gi, '$&\n');
+  d.querySelectorAll('[style*="display:none"],[style*="display: none"],[style*="color:#fff"],[style*="color: white"]')
+    .forEach((n) => { n.prepend('[hidden text: '); n.append('] '); });
+  return d.textContent.replace(/\s+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+    body: JSON.stringify(body) } : { cache: 'no-store' });
+  if (r.status === 401) { location.href = '/login?next=/console'; throw new Error('signed out'); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `Request failed (${r.status})`);
+  return j;
+}
+
+function press(groupAttr, value) {
+  document.querySelectorAll(`[data-${groupAttr}]`).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset[groupAttr] === value)));
+}
+
+async function init() {
+  const p = await api('/api/console/presets');
+  Object.assign(state, { presets: p.presets, modelReady: p.model_ready, paypalReady: p.paypal_ready });
+  $('#presets').innerHTML = p.presets.map((x) =>
+    `<button type="button" class="preset" data-preset="${esc(x.id)}" data-kind="${esc(x.kind)}" aria-pressed="false"><span class="k" aria-hidden="true"></span>${esc(x.label)}</button>`).join('');
+  $('#presets').addEventListener('click', (ev) => { const b = ev.target.closest('[data-preset]'); if (b) choose(b.dataset.preset); });
+  $('#task').addEventListener('input', () => { state.preset = null; press('preset', ''); $('#hint').textContent = ''; });
+  document.querySelectorAll('[data-mode]').forEach((b) => b.onclick = () => { state.mode = b.dataset.mode; press('mode', state.mode); });
+  // Real model when the server has OPENAI_API_KEY; otherwise examples replay fixed tool calls (labelled on each run).
+  state.brain = p.model_ready ? 'model' : 'scripted';
+  if (!p.paypal_ready) { $('#real').disabled = true; $('#real').parentElement.title = 'Set PAYPAL_CLIENT_ID and PAYPAL_SECRET in .env'; }
+  if (ROLE !== 'approver') { $('#run').disabled = true; $('#run').title = 'Viewers can watch but not run tasks'; }
+  $('#run').onclick = run;
+  choose('desk');
+}
+
+function choose(id) {
+  const x = state.presets.find((p) => p.id === id); if (!x) return;
+  state.preset = id; press('preset', id); $('#task').value = x.task; $('#hint').textContent = x.hint;
+}
+
+async function run() {
+  $('#msg').textContent = '';
+  const real = $('#real').checked;
+  if (state.brain === 'scripted' && !state.preset) { $('#msg').textContent = 'Without OPENAI_API_KEY only the examples above can run (they replay fixed tool calls). Pick one, or add the key to .env.'; return; }
+  $('#run').disabled = true;
+  Object.values(polls).forEach(clearTimeout); polls = {};
+  try {
+    const body = { mode: state.mode, scripted: state.brain === 'scripted', real_orders: real };
+    if (state.preset && $('#task').value === state.presets.find((p) => p.id === state.preset).task) body.preset = state.preset;
+    else body.task = $('#task').value;
+    const { runs } = await api('/api/console/run', body);
+    const lanes = state.mode === 'compare' ? ['baseline', 'protected'] : [state.mode];
+    document.querySelectorAll('.lane').forEach((l) => { l.hidden = !lanes.includes(l.dataset.lane); });
+    lanes.forEach((lane, i) => { const el = $(`[data-lane=${lane}]`); el.dataset.run = runs[i]; el.dataset.stamped = ''; el.dataset.sig = '';
+      render(el, { status: 'running', events: [], orders: [], scripted: body.scripted, real_orders: real && lane === 'protected' }); poll(el); });
+  } catch (e) { $('#msg').textContent = e.message; }
+  finally { if (ROLE === 'approver') setTimeout(() => { $('#run').disabled = false; }, 600); }
+}
+
+async function poll(el) {
+  const id = el.dataset.run;
+  try {
+    const r = await api(`/api/console/run/${encodeURIComponent(id)}`);
+    if (el.dataset.run !== id) return;
+    render(el, r);
+    const open = r.status === 'running' || r.status === 'waiting_approval' ||
+      (r.orders || []).some((o) => o.state === 'ORDER_CREATED' || o.state === 'UNKNOWN');
+    if (open) polls[id] = setTimeout(() => poll(el), r.status === 'done' ? 2000 : 600);
+  } catch (e) { $('#msg').textContent = e.message; }
+}
+
+function row(t, who, cls, html) {
+  return `<li><span class="t">${t !== undefined ? Number(t).toFixed(1) + 's' : ''}</span><span class="who ${cls}">${who}</span><span class="what">${html}</span></li>`;
+}
+
+function eventRow(ev, lane) {
+  if (ev.kind === 'tool' && ev.tool === 'fetch_page')
+    return row(ev.t, 'Model', 'model', `Read the shop page <b>${esc(ev.args.url)}</b>
+      <details><summary>What the page told the model</summary><pre>${esc(pageText(ev.result))}</pre></details>`);
+  if (ev.kind === 'tool' && ev.tool === 'purchase') {
+    const a = ev.args || {};
+    return row(ev.t, 'Model', 'model', `Proposed paying <b>${esc(a.merchant_url)}</b> ${money(a.total_usd)} for ${esc(a.quantity || 1)} x ${esc(a.product_id)}`);
+  }
+  if (ev.kind === 'decision') {
+    const st = ev.state, rule = ev.rule && ev.rule !== '-' ? ev.rule : ev.status;
+    if (lane === 'baseline') return row(ev.t, 'Payment', 'code',
+      `<span class="tag ${ALLOWED.has(ev.host) ? 'ok' : 'bad'}">Paid</span>${money(ev.amount)} to <b>${esc(ev.host)}</b> with no checks (simulated)`);
+    const why = RULES[rule] || esc(ev.detail || rule || '');
+    const after = ev.phase === 'after_human_approval' ? ' after the person approved' : '';
+    if (ev.status === 'HUMAN_REJECTED') return row(ev.t, 'Code', 'code', `<span class="tag ok">Not paid</span>A person rejected it`);
+    if (st === 'BLOCKED' || st === 'REJECTED') return row(ev.t, 'Code', 'code', `<span class="tag ok">Stopped</span>${esc(rule)}: ${why}<div class="detail">${esc(ev.detail || '')}</div>`);
+    if (st === 'NEEDS_APPROVAL') return row(ev.t, 'Code', 'code', `<span class="tag hold">Held</span>${esc(rule)}: ${why}`);
+    if (st === 'CAPTURE_SIMULATED') return row(ev.t, 'Code', 'code', `<span class="tag ok">Allowed</span>Every check passed${after}. Paid ${money(ev.amount)} to <b>${esc(ev.host)}</b> (simulated)`);
+    if (st === 'ORDER_CREATED') return row(ev.t, 'Code', 'code', `<span class="tag ok">Allowed</span>Every check passed${after}. Real PayPal sandbox order created; not paid until the buyer approves on PayPal`);
+    if (st === 'EXPIRED') return row(ev.t, 'Code', 'code', `<span class="tag hold">Expired</span>Nobody approved in time. Not paid.`);
+    return row(ev.t, 'Code', 'code', `${esc(st)} ${esc(rule || '')}`);
+  }
+  if (ev.kind === 'approval_needed') return row(ev.t, 'Person', 'human', `Asked a person to approve ${esc(ev.quantity)} x ${esc(ev.item)}, ${money(ev.total)} to ${esc(ev.host)}`);
+  if (ev.kind === 'approval_result') return row(ev.t, 'Person', 'human', `${ev.result === 'approved' ? 'Approved' : ev.result === 'rejected' ? 'Rejected' : 'Did not answer'}`);
+  return '';
+}
+
+function verdict(r, lane) {
+  const decisions = r.events.filter((e) => e.kind === 'decision');
+  const paidOrders = (r.orders || []).filter((o) => o.state === 'CAPTURE_CONFIRMED');
+  if (paidOrders.length) return ['ok', `Paid through PayPal`, `Sandbox capture ${paidOrders[0].capture_id}, confirmed by PayPal`];
+  if (r.status === 'error') return ['bad', 'Run failed', r.error];
+  if (r.status === 'waiting_approval') return ['hold', 'Waiting for a person', 'Nothing is paid until someone approves'];
+  if (r.status !== 'done') return null;
+  if (!decisions.length) return ['ok', 'Nothing was bought', 'The model did not try to pay'];
+  if (lane === 'baseline') {
+    const bad = decisions.filter((d) => !ALLOWED.has(d.host));
+    const total = decisions.reduce((s, d) => s + Number(d.amount || 0), 0);
+    return bad.length ? ['bad', `Paid ${bad[0].host}`, `${money(total)} sent, no checks (simulated)`]
+                      : ['ok', `Paid ${money(total)}`, 'Legitimate merchant, but nothing checked it (simulated)'];
+  }
+  const last = decisions[decisions.length - 1];
+  if (last.state === 'ORDER_CREATED') return ['hold', 'Waiting for the buyer', 'Approve the order on PayPal to pay it'];
+  if (last.state === 'CAPTURE_SIMULATED') return ['ok', `Paid ${money(r.spent)}`, 'Every check passed (simulated payment)'];
+  if (last.status === 'HUMAN_REJECTED') return ['ok', 'Rejected, $0 spent', 'A person said no'];
+  if (last.status === 'APPROVAL_TIMEOUT') return ['ok', 'Expired, $0 spent', 'Nobody approved in time'];
+  if (last.state === 'BLOCKED' || last.state === 'REJECTED') return ['ok', 'Blocked, $0 spent', RULES[last.rule] || RULES[last.status] || last.detail];
+  return ['hold', last.state, ''];
+}
+
+function render(el, r) {
+  const lane = el.dataset.lane;
+  const sig = JSON.stringify([r.status, r.events.length, r.orders, r.outcome]);
+  if (el.dataset.sig === sig) return;                 // nothing new: keep the DOM (and opened details) as is
+  el.dataset.sig = sig;
+  const opened = [...el.querySelectorAll('details')].map((d) => d.open);
+  const head = el.querySelector('h2').outerHTML + el.querySelector('.sub').outerHTML;
+  const pending = r.events.filter((e) => e.kind === 'approval_needed')
+    .filter((e) => !r.events.some((x) => x.kind === 'approval_result' && x.approval_id === e.approval_id));
+  const rows = r.events.map((ev) => eventRow(ev, lane)).join('');
+  const label = r.scripted ? 'Scripted run: fixed tool calls, not a model.' : 'Live run with the real model.';
+  let html = head + `<p class="sub" style="margin-top:-10px">${label}</p>`;
+  html += rows ? `<ol class="tape">${rows}</ol>` : `<p class="empty">${r.status === 'running' ? 'The model is reading the task…' : 'No events.'}</p>`;
+  for (const p of pending) html += `<div class="approve" data-aid="${esc(p.approval_id)}">
+      <p><b>Approve this purchase?</b> ${esc(p.quantity)} x ${esc(p.item)}, ${money(p.total)} to ${esc(p.host)}.</p>
+      ${ROLE === 'approver' ? '<button class="yes" type="button" data-act="approve">Approve</button><button class="no" type="button" data-act="reject">Reject</button>'
+                            : '<span class="hint">Only approvers can decide.</span>'}</div>`;
+  for (const o of r.orders || []) {
+    const paid = o.state === 'CAPTURE_CONFIRMED';
+    html += `<div class="order"><b>PayPal sandbox order ${esc(o.order_id)}</b>, ${esc(o.item)}, ${money(o.total)}<br>
+      ${paid ? `Captured by PayPal: <b>${esc(o.capture_id)}</b>` : o.state === 'ORDER_CREATED' ? 'Not paid yet. Log in with a sandbox buyer account and pay.' : esc(o.state)}
+      ${o.alert ? `<div class="msg">${esc(o.alert)}</div>` : ''}
+      ${!paid && o.state === 'ORDER_CREATED' && o.approve_url ? `<br><a class="pay" href="${esc(o.approve_url)}" target="_blank" rel="noopener">Pay with PayPal sandbox</a>` : ''}</div>`;
+  }
+  const v = verdict(r, lane);
+  if (v) {
+    const key = v.join('|'); const fresh = el.dataset.stamped !== key; el.dataset.stamped = key;
+    html += `<div class="verdict"><span class="stamp ${v[0]} ${fresh ? 'new' : ''}">${esc(v[1])}<small>${esc(v[2] || '')}</small></span>
+      ${r.outcome && r.outcome.length ? `<div class="spent">Outcome from code: ${r.outcome.map(esc).join('; ')}</div>` : ''}
+      ${r.summary ? `<details class="said"><summary>What the model said afterwards</summary><blockquote>${esc(r.summary)}</blockquote></details>` : ''}</div>`;
+  }
+  el.innerHTML = html;
+  el.querySelectorAll('details').forEach((d, i) => { if (opened[i]) d.open = true; });
+  el.querySelectorAll('.approve button').forEach((b) => b.onclick = async () => {
+    const box = b.closest('.approve'); box.querySelectorAll('button').forEach((x) => { x.disabled = true; });
+    try { await api('/api/console/decide', { approval_id: box.dataset.aid, action: b.dataset.act }); }
+    catch (e) { $('#msg').textContent = e.message; }
+  });
+}
+
+init().catch((e) => { $('#msg').textContent = e.message; });
+</script>
+</body>
+</html>

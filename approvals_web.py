@@ -164,7 +164,7 @@ def index(request: Request):
 <h1>Agent Wallet: human approvals</h1>
 <form method=post action="/logout" style="float:right">{csrf}<span class=note>signed in as <b>{e(user["username"])}</b> ({e(user["role"])})</span>
 <button type=submit>Sign out</button></form>
-<p><a href="/dashboard/">Open the AG Studio security dashboard &rarr;</a></p>
+<p><a href="/console"><b>Open the demo console &rarr;</b></a> &middot; <a href="/dashboard/">AG Studio security dashboard &rarr;</a></p>
 <div class=banner><b>Local demo.</b> Sign-in required; only approvers can approve, and every decision records who made it.
 In the agent and the evals, payments are <b>SIMULATED</b> (<code>CAPTURE_SIMULATED</code>). With <code>--real-orders</code>, a real sandbox capture happens only after a buyer approves the order on PayPal. Approving here only records your decision; the purchase still
 has to pass the HMAC-bound approval check, catalog re-check and budget in <code>executor.py</code>.</div>
@@ -279,6 +279,84 @@ def paypal_cancel(intent: str = ""):
     except Exception as ex:
         res = {"result": "UNKNOWN", "detail": type(ex).__name__}
     return _result_page("PayPal sandbox payment cancelled", res, store.get(intent))
+
+# ---- Demo console (/console): run tasks and watch them, signed in -----------------------------------
+# Runs use the same agent.run_agent / executor.execute_purchase as the CLI. Starting a run or deciding an
+# approval needs the approver role and the session's CSRF token (X-CSRF-Token header).
+def _console_guard(request):
+    user = request.state.user
+    if user["role"] != "approver":
+        return JSONResponse({"error": "only approvers can run or decide"}, status_code=403)
+    if not auth.csrf_ok(user, request.headers.get("x-csrf-token")):
+        return JSONResponse({"error": "bad CSRF token"}, status_code=403)
+    return None
+
+@app.get("/console", response_class=HTMLResponse)
+def console_page(request: Request):
+    user = request.state.user
+    page = (ROOT / "console.html").read_text(encoding="utf-8")
+    return page.replace("{{CSRF}}", e(user["csrf"])).replace("{{USER}}", e(user["username"])).replace("{{ROLE}}", e(user["role"]))
+
+@app.get("/api/console/presets")
+def console_presets():
+    import os, console
+    return {"presets": [{k: p[k] for k in ("id", "label", "kind", "task", "hint")} for p in console.PRESETS],
+            "model_ready": bool(os.environ.get("OPENAI_API_KEY")),
+            "paypal_ready": bool(os.environ.get("PAYPAL_CLIENT_ID") and os.environ.get("PAYPAL_SECRET")),
+            "shop_up": console.shop_up()}
+
+@app.post("/api/console/run")
+async def console_run(request: Request):
+    import os, console
+    bad = _console_guard(request)
+    if bad:
+        return bad
+    try:
+        body = await request.json()
+        assert isinstance(body, dict)
+    except Exception:
+        return JSONResponse({"error": "JSON object expected"}, status_code=400)
+    mode, scripted, real = body.get("mode", "compare"), bool(body.get("scripted")), bool(body.get("real_orders"))
+    preset = console.PRESET.get(body.get("preset") or "")
+    task = (preset["task"] if preset else str(body.get("task") or "")).strip()
+    if mode not in ("compare", "baseline", "protected"):
+        return JSONResponse({"error": "mode must be compare, baseline or protected"}, status_code=400)
+    if not task or len(task) > 500:
+        return JSONResponse({"error": "task must be 1-500 characters"}, status_code=400)
+    if scripted and not preset:
+        return JSONResponse({"error": "scripted runs need a preset (they replay fixed tool calls)"}, status_code=400)
+    if not scripted and not os.environ.get("OPENAI_API_KEY"):
+        return JSONResponse({"error": "OPENAI_API_KEY is not set: use a scripted run"}, status_code=400)
+    if real and not (os.environ.get("PAYPAL_CLIENT_ID") and os.environ.get("PAYPAL_SECRET")):
+        return JSONResponse({"error": "PayPal sandbox keys are not set"}, status_code=400)
+    if not console.ensure_shop():
+        return JSONResponse({"error": "the demo shop on :8001 did not start"}, status_code=503)
+    modes = ["baseline", "protected"] if mode == "compare" else [mode]
+    ids = [console.start(task, m, scripted=scripted, real_orders=real, user=request.state.user["username"],
+                         preset=preset["id"] if preset else None,
+                         client=console.ScriptedClient(preset["script"]) if scripted else None) for m in modes]
+    return {"runs": ids}
+
+@app.get("/api/console/run/{run_id}")
+def console_run_status(run_id: str):
+    import console
+    snap = console.snapshot(run_id)
+    return snap if snap else JSONResponse({"error": "no such run"}, status_code=404)
+
+@app.post("/api/console/decide")
+async def console_decide(request: Request):
+    bad = _console_guard(request)
+    if bad:
+        return bad
+    try:
+        body = await request.json()
+        aid, action = str(body.get("approval_id") or ""), body.get("action")
+    except Exception:
+        return JSONResponse({"error": "JSON object expected"}, status_code=400)
+    if not aid or action not in ("approve", "reject"):
+        return JSONResponse({"error": "bad action"}, status_code=400)
+    ok = audit.decide(aid, action == "approve", by=request.state.user["username"])
+    return {"ok": ok, "status": audit.get_status(aid)}
 
 @app.get("/api/intents")
 def api_intents():

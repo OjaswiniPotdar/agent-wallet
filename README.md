@@ -57,6 +57,8 @@ and keeps the budget reserved; a possibly-successful payment is never blindly re
 | `lifecycle.py` | intent store, reconciliation against PayPal, guarded capture, webhook handling |
 | `merchant/site.py` | fake shop with a trusted `/price` catalog and poisoned product pages |
 | `dashboard/`, `dashboard_data.py` | AG Studio security dashboard (read-only) and the data it reads |
+| `console.html`, `console.py` | demo console: run tasks side by side and watch each decision live |
+| `auth.py` | sign-in for the approval page, console and dashboard |
 | `evals/` | scenarios, runner, classifier, report |
 | `llm_client.py` | plain-HTTPS fallback when the `openai` SDK cannot load |
 
@@ -102,6 +104,21 @@ If `uv` warns that `VIRTUAL_ENV` does not match, call the venv's Python directly
 Never commit `.env`. `python scripts/scan_secrets.py --history` checks tracked files and git history.
 
 ## Run it
+
+### Demo console (the quickest way to see it)
+```bash
+python scripts/create_user.py yourname --role approver   # once
+python scripts/dev.py approvals                          # then open http://localhost:8002/console and sign in
+```
+Pick an example (redirect attack, look-alike domain, inflated price, chair that needs approval, legitimate paper order) or type
+your own task, and run it **unprotected and protected side by side**. Each run prints as a live tape: the page the model read
+(including any hidden injected text), what the model proposed, what the code decided and why, the person's approval, and a final
+verdict. Approve or reject held purchases right there. With *Real PayPal sandbox order*, the protected run creates a real sandbox
+order and shows the PayPal buyer link; the card turns to *Paid through PayPal* once PayPal confirms the capture.
+It uses the real model when `OPENAI_API_KEY` is set; without a key, the examples replay fixed tool calls (not a model) through the same enforcement code, and each run says which it was. The console starts the demo
+shop on `:8001` if it is not running. Starting runs and approving need the approver role and the session's CSRF token.
+
+### Command line
 
 ```bash
 python scripts/dev.py demo --scripted --yes   # no API key: fixed tool calls, NOT an LLM, same enforcement code path
