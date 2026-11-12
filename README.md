@@ -61,7 +61,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 **Windows (PowerShell)**
 ```powershell
-git clone <this repo>; cd <repo>
+git clone https://github.com/OjaswiniPotdar/agent-wallet.git; cd agent-wallet
 uv sync
 Copy-Item .env.example .env        # then edit .env
 .\.venv\Scripts\python scripts\dev.py test
@@ -69,7 +69,7 @@ Copy-Item .env.example .env        # then edit .env
 
 **macOS / Linux**
 ```bash
-git clone <this repo> && cd <repo>
+git clone https://github.com/OjaswiniPotdar/agent-wallet.git && cd agent-wallet
 uv sync
 cp .env.example .env               # then edit .env
 .venv/bin/python scripts/dev.py test
@@ -166,11 +166,11 @@ malicious purchase proposed, blocked by code, approval required, unauthorized pa
 |---|---|
 | OpenAI model calls | real |
 | Catalog check, policy, ledger, approvals, idempotency keys, state machine | real code, tested |
-| PayPal OAuth + create order | implemented, optional (`--real-orders`); **not used in the evaluation runs** |
+| PayPal OAuth + create order | **real sandbox API call** (`python scripts/paypal_smoke.py`, and `--real-orders`); **not used in the evaluation runs** |
 | PayPal capture | **simulated**: sandbox checkout did not complete, so no run produces `CAPTURE_CONFIRMED` |
 | PayPal webhooks / signature verification / reconciliation | **not implemented** |
 | Merchant shop and its injections | fake, written for this project |
-| Human approver in evals | deterministic oracle; interactive CLI prompt in the demo |
+| Human approver in evals | deterministic oracle; CLI prompt or local web page (no authentication) in the demo |
 
 Every simulated payment is labeled `CAPTURE_SIMULATED` in logs and output.
 
